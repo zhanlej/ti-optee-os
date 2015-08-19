@@ -166,6 +166,17 @@ UNWIND(	.cantunwind)
 
 .smc_from_nsec:
 	/*
+	 * Make a call for implementing any platform specific monitor
+	 * mode functionality. We should only return here if the
+	 * platform doesn't recognize or implement the service. Therefore
+	 * the platform specific handler should return to the non-secure
+	 * world when complete.
+	 */
+	push    {lr}
+	bl      sm_platform_handler
+	pop     {lr}
+
+	/*
 	 * As we're coming from non-secure world (NS bit set) the stack
 	 * pointer points to sm_ctx.nsec.r0 at this stage. After the
 	 * instruction below the stack pointer points to sm_ctx.

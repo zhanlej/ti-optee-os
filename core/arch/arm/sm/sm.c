@@ -46,3 +46,8 @@ bool sm_from_nsec(struct sm_ctx *ctx)
 		ctx->sec.mon_lr = (uint32_t)&thread_vector_table.std_smc_entry;
 	return true;	/* return into secure state */
 }
+
+/* May be overridden in platform specific code */
+__weak void sm_platform_handler(void)
+{
+}
