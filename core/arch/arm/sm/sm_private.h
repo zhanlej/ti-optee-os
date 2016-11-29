@@ -34,5 +34,8 @@ bool sm_from_nsec(struct sm_ctx *ctx);
 void sm_save_modes_regs(struct sm_mode_regs *regs);
 void sm_restore_modes_regs(struct sm_mode_regs *regs);
 
+/* Weak symbol for platform specific monitor service handling */
+void sm_platform_handler(void);
+
 #endif /*SM_PRIVATE_H*/
 

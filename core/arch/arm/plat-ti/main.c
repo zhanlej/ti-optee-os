@@ -31,7 +31,6 @@
 #include <string.h>
 #include <assert.h>
 #include <drivers/gic.h>
-#include <drivers/serial8250_uart.h>
 #include <arm.h>
 #include <kernel/generic_boot.h>
 #include <kernel/panic.h>
@@ -47,7 +46,35 @@
 #include <console.h>
 #include <sm/sm.h>
 
-static void main_fiq(void);
+static struct gic_data gic_data;
+
+register_phys_mem(MEM_AREA_IO_SEC, GICC_BASE, GICC_SIZE);
+register_phys_mem(MEM_AREA_IO_SEC, GICD_BASE, GICD_SIZE);
+
+void main_init_gic(void)
+{
+	vaddr_t gicc_base;
+	vaddr_t gicd_base;
+
+	gicc_base = (vaddr_t)phys_to_virt(GICC_BASE, MEM_AREA_IO_SEC);
+	gicd_base = (vaddr_t)phys_to_virt(GICD_BASE, MEM_AREA_IO_SEC);
+
+	if (!gicc_base || !gicd_base)
+		panic();
+
+	gic_init(&gic_data, gicc_base, gicd_base);
+	itr_init(&gic_data.chip);
+}
+
+void main_secondary_init_gic(void)
+{
+	gic_cpu_init(&gic_data);
+}
+
+static void main_fiq(void)
+{
+	gic_it_handle(&gic_data);
+}
 
 static const struct thread_handlers handlers = {
 	.std_smc = tee_entry_std,
@@ -65,45 +92,6 @@ const struct thread_handlers *generic_boot_get_handlers(void)
 {
 	return &handlers;
 }
-
-static void main_fiq(void)
-{
-	panic();
-}
-
-static vaddr_t console_base(void)
-{
-	static void *va;
-
-	if (cpu_mmu_enabled()) {
-		if (!va)
-			va = phys_to_virt(CONSOLE_UART_BASE, MEM_AREA_IO_SEC);
-		return (vaddr_t)va;
-	}
-	return CONSOLE_UART_BASE;
-}
-
-void console_init(void)
-{
-	serial8250_uart_init(console_base(), CONSOLE_UART_CLK_IN_HZ,
-			     CONSOLE_BAUDRATE);
-}
-
-void console_putc(int ch)
-{
-	vaddr_t base = console_base();
-
-	if (ch == '\n')
-		serial8250_uart_putc('\r', base);
-	serial8250_uart_putc(ch, base);
-}
-
-void console_flush(void)
-{
-	serial8250_uart_flush_tx_fifo(console_base());
-}
-
-
 
 struct plat_nsec_ctx {
 	uint32_t usr_sp;
@@ -130,12 +118,16 @@ struct plat_nsec_ctx {
 
 void init_sec_mon(unsigned long nsec_entry)
 {
-	struct plat_nsec_ctx *plat_ctx = (struct plat_nsec_ctx *)nsec_entry;
+	struct plat_nsec_ctx *plat_ctx;
 	struct sm_nsec_ctx *nsec_ctx;
 
+	plat_ctx = phys_to_virt(nsec_entry, MEM_AREA_IO_SEC);
+	if (!plat_ctx)
+		panic();
+
 	/* Invalidate cache to fetch data from external memory */
-	cache_maintenance_l1(DCACHE_AREA_INVALIDATE, (void *)nsec_entry,
-		sizeof(struct plat_nsec_ctx));
+	cache_maintenance_l1(DCACHE_AREA_INVALIDATE,
+			     (void *)plat_ctx, sizeof(*plat_ctx));
 
 	/* Initialize secure monitor */
 	nsec_ctx = sm_get_nsec_ctx();
@@ -157,5 +149,3 @@ void init_sec_mon(unsigned long nsec_entry)
 	nsec_ctx->mon_lr = plat_ctx->mon_lr;
 	nsec_ctx->mon_spsr = plat_ctx->mon_spsr;
 }
-
-

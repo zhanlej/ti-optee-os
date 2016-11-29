@@ -28,39 +28,60 @@
 #ifndef PLATFORM_CONFIG_H
 #define PLATFORM_CONFIG_H
 
-#if defined(PLATFORM_FLAVOR_dra7xx)
+#if defined(PLATFORM_FLAVOR_dra7xx) || defined(PLATFORM_FLAVOR_am57xx)
 
-#define DRAM0_BASE		0x94C00000
-#define DRAM0_SIZE		0x00800000
+#define DRAM0_BASE		0xbe000000
+#define DRAM0_SIZE		0x02000000
 
 #ifdef CFG_WITH_PAGER
 #error Pager not supported on this platform
 #endif /*CFG_WITH_PAGER*/
 
 /* Location of protected DDR on the DRA7xx platform */
-#define TZDRAM_BASE		0x94D00000
-#define TZDRAM_SIZE		0x00700000
+#define TZDRAM_BASE		0xbe000000
+#define TZDRAM_SIZE		0x01c00000
 
 #define CFG_TEE_CORE_NB_CORE	2
 
-/* UART1 */
-#define CONSOLE_UART_BASE		0x4806A000
-#define CONSOLE_UART_CLK_IN_HZ	48000000
-#define UART_BAUDRATE			115200
+#define UART1_BASE      0x4806A000
+#define UART2_BASE      0x4806C000
+#define UART3_BASE      0x48020000
 
-#define GIC_BASE            0x48211000
-#define SECRAM_BASE         0x40200000
+/* UART1 */
+#define CONSOLE_UART_BASE       UART1_BASE
+#define CONSOLE_BAUDRATE        115200
+#define CONSOLE_UART_CLK_IN_HZ	48000000
+
+#define GIC_BASE        0x48210000
+#define GICC_OFFSET     0x2000
+#define GICC_SIZE       0x1000
+#define GICD_OFFSET     0x1000
+#define GICD_SIZE       0x1000
+#define GICC_BASE       (GIC_BASE + GICC_OFFSET)
+#define GICD_BASE       (GIC_BASE + GICD_OFFSET)
+
+#define SECRAM_BASE     0x40200000
+
+/* RNG */
+#define RNG_BASE        0x48090000
 
 #else
 #error "Unknown platform flavor"
+#endif
+
+#if defined(PLATFORM_FLAVOR_am57xx)
+
+/* UART3 */
+#define CONSOLE_UART_BASE       UART3_BASE
+
 #endif
 
 /* Make stacks aligned to data cache line length */
 #define STACK_ALIGNMENT		64
 
 /* Full GlobalPlatform test suite requires CFG_SHMEM_SIZE to be at least 2MB */
-#define CFG_SHMEM_START		(DRAM0_BASE)
-#define CFG_SHMEM_SIZE		0x100000
+#define CFG_SHMEM_START		(DRAM0_BASE + TZDRAM_SIZE)
+#define CFG_SHMEM_SIZE		0x400000
 
 #define CFG_TEE_RAM_VA_SIZE	(1024 * 1024)
 
@@ -84,30 +105,9 @@
 #define CFG_TA_RAM_SIZE		ROUNDDOWN((TZDRAM_SIZE - CFG_TEE_RAM_VA_SIZE), \
 					  CORE_MMU_DEVICE_SIZE)
 
-#define GICC_OFFSET         0x1000
-#define GICD_OFFSET         0x0
-
-#define DEVICE0_PA_BASE		ROUNDDOWN(CONSOLE_UART_BASE, \
-					  CORE_MMU_DEVICE_SIZE)
-#define DEVICE0_VA_BASE		DEVICE0_PA_BASE
-#define DEVICE0_SIZE		CORE_MMU_DEVICE_SIZE
-#define DEVICE0_TYPE		MEM_AREA_IO_NSEC
-
-#define DEVICE1_PA_BASE		ROUNDDOWN(GIC_BASE, CORE_MMU_DEVICE_SIZE)
-#define DEVICE1_VA_BASE		DEVICE1_PA_BASE
-#define DEVICE1_SIZE		CORE_MMU_DEVICE_SIZE
-#define DEVICE1_TYPE		MEM_AREA_IO_SEC
-
 #define DEVICE2_PA_BASE		ROUNDDOWN(SECRAM_BASE, CORE_MMU_DEVICE_SIZE)
 #define DEVICE2_VA_BASE		DEVICE2_PA_BASE
 #define DEVICE2_SIZE		CORE_MMU_DEVICE_SIZE
 #define DEVICE2_TYPE		MEM_AREA_IO_SEC
-
-#ifndef UART_BAUDRATE
-#define UART_BAUDRATE		115200
-#endif
-#ifndef CONSOLE_BAUDRATE
-#define CONSOLE_BAUDRATE	UART_BAUDRATE
-#endif
 
 #endif /*PLATFORM_CONFIG_H*/

@@ -1,6 +1,5 @@
 /*
  * Copyright (c) 2016, Linaro Limited
- * Copyright (c) 2014, STMicroelectronics International N.V.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -25,29 +24,44 @@
  * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
  * POSSIBILITY OF SUCH DAMAGE.
  */
-#include <arm.h>
-#include <compiler.h>
-#include <kernel/misc.h>
+
+#include <console.h>
+#include <drivers/serial8250_uart.h>
+#include <mm/core_memprot.h>
 #include <platform_config.h>
-#include <sm/optee_smc.h>
-#include <sm/sm.h>
-#include <string.h>
-#include "sm_private.h"
 
-bool sm_from_nsec(struct sm_ctx *ctx)
+register_phys_mem(MEM_AREA_IO_NSEC,
+		  CONSOLE_UART_BASE,
+		  SERIAL8250_UART_REG_SIZE);
+
+static vaddr_t console_base(void)
 {
-	sm_save_modes_regs(&ctx->nsec.mode_regs);
-	sm_restore_modes_regs(&ctx->sec.mode_regs);
+	static void *va;
 
-	memcpy(&ctx->sec.r0, &ctx->nsec.r0, sizeof(uint32_t) * 8);
-	if (OPTEE_SMC_IS_FAST_CALL(ctx->sec.r0))
-		ctx->sec.mon_lr = (uint32_t)&thread_vector_table.fast_smc_entry;
-	else
-		ctx->sec.mon_lr = (uint32_t)&thread_vector_table.std_smc_entry;
-	return true;	/* return into secure state */
+	if (cpu_mmu_enabled()) {
+		if (!va)
+			va = phys_to_virt(CONSOLE_UART_BASE, MEM_AREA_IO_NSEC);
+		return (vaddr_t)va;
+	}
+	return CONSOLE_UART_BASE;
 }
 
-/* May be overridden in platform specific code */
-__weak void sm_platform_handler(void)
+void console_init(void)
 {
+	serial8250_uart_init(console_base(), CONSOLE_UART_CLK_IN_HZ,
+			     CONSOLE_BAUDRATE);
+}
+
+void console_putc(int ch)
+{
+	vaddr_t base = console_base();
+
+	if (ch == '\n')
+		serial8250_uart_putc('\r', base);
+	serial8250_uart_putc(ch, base);
+}
+
+void console_flush(void)
+{
+	serial8250_uart_flush_tx_fifo(console_base());
 }
