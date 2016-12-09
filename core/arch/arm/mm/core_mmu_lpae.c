@@ -93,6 +93,7 @@
 #define BLOCK_DESC		0x1
 #define L3_BLOCK_DESC		0x3
 #define TABLE_DESC		0x3
+#define DESC_ENTRY_TYPE_MASK	0x3
 
 #define HIDDEN_DESC		0x4
 #define HIDDEN_DIRTY_DESC	0x8
@@ -192,7 +193,7 @@ static unsigned next_xlat __early_bss;
 static uint64_t tcr_ps_bits __early_bss;
 static int user_va_idx = -1;
 
-static uint32_t desc_to_mattr(uint64_t desc)
+static uint32_t desc_to_mattr(unsigned level, uint64_t desc)
 {
 	uint32_t a;
 
@@ -202,6 +203,14 @@ static uint32_t desc_to_mattr(uint64_t desc)
 		if (desc & HIDDEN_DIRTY_DESC)
 			return TEE_MATTR_HIDDEN_DIRTY_BLOCK;
 		return 0;
+	}
+
+	if (level == 3) {
+		if ((desc & DESC_ENTRY_TYPE_MASK) != L3_BLOCK_DESC)
+			return 0;
+	} else {
+		if ((desc & DESC_ENTRY_TYPE_MASK) == TABLE_DESC)
+			return TEE_MATTR_TABLE;
 	}
 
 	a = TEE_MATTR_VALID_BLOCK;
@@ -569,18 +578,24 @@ void core_mmu_set_info_table(struct core_mmu_table_info *tbl_info,
 		tbl_info->num_entries = XLAT_TABLE_ENTRIES;
 }
 
+void core_mmu_get_user_pgdir(struct core_mmu_table_info *pgd_info)
+{
+	vaddr_t va_range_base;
+	void *tbl = xlat_tables_ul1[thread_get_id()];
+
+	core_mmu_get_user_va_range(&va_range_base, NULL);
+	core_mmu_set_info_table(pgd_info, 2, va_range_base, tbl);
+}
+
 void core_mmu_create_user_map(struct user_ta_ctx *utc,
 			      struct core_mmu_user_map *map)
 {
 	struct core_mmu_table_info dir_info;
-	vaddr_t va_range_base;
-	void *tbl = xlat_tables_ul1[thread_get_id()];
 
 	COMPILE_TIME_ASSERT(sizeof(uint64_t) * XLAT_TABLE_ENTRIES == PGT_SIZE);
 
-	core_mmu_get_user_va_range(&va_range_base, NULL);
-	core_mmu_set_info_table(&dir_info, 2, va_range_base, tbl);
-	memset(tbl, 0, PGT_SIZE);
+	core_mmu_get_user_pgdir(&dir_info);
+	memset(dir_info.table, 0, PGT_SIZE);
 	core_mmu_populate_user_map(&dir_info, utc);
 	map->user_map = virt_to_phys(dir_info.table) | TABLE_DESC;
 	map->asid = utc->context & TTBR_ASID_MASK;
@@ -640,7 +655,7 @@ void core_mmu_set_entry_primitive(void *table, size_t level, size_t idx,
 	tbl[idx] = desc | pa;
 }
 
-void core_mmu_get_entry_primitive(const void *table, size_t level __unused,
+void core_mmu_get_entry_primitive(const void *table, size_t level,
 				  size_t idx, paddr_t *pa, uint32_t *attr)
 {
 	const uint64_t *tbl = table;
@@ -649,7 +664,7 @@ void core_mmu_get_entry_primitive(const void *table, size_t level __unused,
 		*pa = (tbl[idx] & ((1ull << 40) - 1)) & ~((1 << 12) - 1);
 
 	if (attr)
-		*attr = desc_to_mattr(tbl[idx]);
+		*attr = desc_to_mattr(level, tbl[idx]);
 }
 
 bool core_mmu_user_va_range_is_defined(void)

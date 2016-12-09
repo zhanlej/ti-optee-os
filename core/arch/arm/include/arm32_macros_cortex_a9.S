@@ -1,6 +1,8 @@
 /*
- * Copyright (c) 2015, Linaro Limited
+ * Copyright (c) 2016, Freescale Semiconductor, Inc.
  * All rights reserved.
+ *
+ * Peng Fan <peng.fan@nxp.com>
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are met:
@@ -24,37 +26,19 @@
  * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
  * POSSIBILITY OF SUCH DAMAGE.
  */
-#ifndef KEEP_H
-#define KEEP_H
 
-#ifdef ASM
-
-	.macro KEEP_PAGER sym
-	.pushsection __keep_meta_vars_pager
-	___keep_pager_\sym:
-	.long	\sym
-	.popsection
+	.macro write_pcr reg
+	mcr  p15, 0, \reg, c15, c0, 0
 	.endm
 
-	.macro KEEP_INIT sym
-	.pushsection __keep_meta_vars_init
-	___keep_init_\sym:
-	.long	\sym
-	.popsection
+	.macro read_pcr reg
+	mrc  p15, 0, \reg, c15, c0, 0
 	.endm
 
-#else
+	.macro write_diag reg
+	mcr  p15, 0, \reg, c15, c0, 1
+	.endm
 
-#include <compiler.h>
-
-#define KEEP_PAGER(sym) \
-	const unsigned long ____keep_pager_##sym  \
-		__section("__keep_meta_vars_pager") = (unsigned long)&sym
-
-#define KEEP_INIT(sym) \
-	const unsigned long ____keep_init_##sym  \
-		__section("__keep_meta_vars_init") = (unsigned long)&sym
-
-#endif /* ASM */
-
-#endif /*KEEP_H*/
+	.macro read_diag reg
+	mrc  p15, 0, \reg, c15, c0, 1
+	.endm

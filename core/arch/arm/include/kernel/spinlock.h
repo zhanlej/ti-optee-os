@@ -1,5 +1,6 @@
 /*
  * Copyright (c) 2014, STMicroelectronics International N.V.
+ * Copyright (c) 2016, Linaro Limited
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -25,20 +26,60 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#ifndef TZ_PROC_H
-#define TZ_PROC_H
+#ifndef KERNEL_SPINLOCK_H
+#define KERNEL_SPINLOCK_H
 
 #define SPINLOCK_LOCK       1
 #define SPINLOCK_UNLOCK     0
 
 #ifndef ASM
-void cpu_spin_lock(unsigned int *lock);
-unsigned int cpu_spin_trylock(unsigned int *lock);
-void cpu_spin_unlock(unsigned int *lock);
+#include <assert.h>
+#include <compiler.h>
+#include <stdbool.h>
+#include <kernel/thread.h>
 
-void cpu_mmu_enable(void);
-void cpu_mmu_enable_icache(void);
-void cpu_mmu_enable_dcache(void);
-#endif /*ASM*/
-
+#ifdef CFG_TEE_CORE_DEBUG
+void spinlock_count_incr(void);
+void spinlock_count_decr(void);
+bool have_spinlock(void);
+static inline void assert_have_no_spinlock(void)
+{
+	assert(!have_spinlock());
+}
+#else
+static inline void spinlock_count_incr(void) { }
+static inline void spinlock_count_decr(void) { }
+static inline void assert_have_no_spinlock(void) { }
 #endif
+
+void __cpu_spin_lock(unsigned int *lock);
+unsigned int __cpu_spin_trylock(unsigned int *lock);
+void __cpu_spin_unlock(unsigned int *lock);
+
+static inline void cpu_spin_lock(unsigned int *lock)
+{
+	assert(thread_irq_disabled());
+	__cpu_spin_lock(lock);
+	spinlock_count_incr();
+}
+
+static inline unsigned int cpu_spin_trylock(unsigned int *lock)
+{
+	unsigned int locked;
+
+	assert(thread_irq_disabled());
+	locked = __cpu_spin_trylock(lock);
+	if (locked)
+		spinlock_count_incr();
+	return locked;
+}
+
+static inline void cpu_spin_unlock(unsigned int *lock)
+{
+	assert(thread_irq_disabled());
+	__cpu_spin_unlock(lock);
+	spinlock_count_decr();
+}
+#endif /* ASM */
+
+#endif /* KERNEL_SPINLOCK_H */

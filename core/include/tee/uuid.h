@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, Linaro Limited
+ * Copyright (c) 2016, Linaro Limited
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -24,37 +24,26 @@
  * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
  * POSSIBILITY OF SUCH DAMAGE.
  */
-#ifndef KEEP_H
-#define KEEP_H
 
-#ifdef ASM
+#ifndef __TEE_UUID
+#define __TEE_UUID
 
-	.macro KEEP_PAGER sym
-	.pushsection __keep_meta_vars_pager
-	___keep_pager_\sym:
-	.long	\sym
-	.popsection
-	.endm
+#include <optee_msg.h>
+#include <tee_api_types.h>
+#include <types_ext.h>
 
-	.macro KEEP_INIT sym
-	.pushsection __keep_meta_vars_init
-	___keep_init_\sym:
-	.long	\sym
-	.popsection
-	.endm
+/**
+ * tee_uuid_to_octets() - serialize a TEE_UUID into an octet string
+ * @dst: pointer to octet string
+ * @src: pointer TEE_UUID
+ */
+void tee_uuid_to_octets(uint8_t *dst, const TEE_UUID *src);
 
-#else
+/**
+ * tee_uuid_from_octets() - de-serialize an octet string into a TEE_UUID
+ * @dst: pointer TEE_UUID
+ * @src: pointer to octet string
+ */
+void tee_uuid_from_octets(TEE_UUID *dst, const uint8_t *src);
 
-#include <compiler.h>
-
-#define KEEP_PAGER(sym) \
-	const unsigned long ____keep_pager_##sym  \
-		__section("__keep_meta_vars_pager") = (unsigned long)&sym
-
-#define KEEP_INIT(sym) \
-	const unsigned long ____keep_init_##sym  \
-		__section("__keep_meta_vars_init") = (unsigned long)&sym
-
-#endif /* ASM */
-
-#endif /*KEEP_H*/
+#endif /*__TEE_UUID*/

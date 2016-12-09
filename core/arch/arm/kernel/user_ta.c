@@ -29,27 +29,28 @@
 #include <assert.h>
 #include <compiler.h>
 #include <keep.h>
-#include <types_ext.h>
-#include <stdlib.h>
 #include <kernel/panic.h>
 #include <kernel/tee_ta_manager.h>
 #include <kernel/thread.h>
 #include <kernel/user_ta.h>
 #include <mm/core_memprot.h>
 #include <mm/core_mmu.h>
+#include <mm/pgt_cache.h>
 #include <mm/tee_mm.h>
 #include <mm/tee_mmu.h>
 #include <mm/tee_pager.h>
-#include <mm/pgt_cache.h>
+#include <signed_hdr.h>
+#include <stdlib.h>
+#include <ta_pub_key.h>
 #include <tee/tee_cryp_provider.h>
 #include <tee/tee_cryp_utl.h>
 #include <tee/tee_obj.h>
 #include <tee/tee_svc_cryp.h>
 #include <tee/tee_svc.h>
 #include <tee/tee_svc_storage.h>
-#include <signed_hdr.h>
-#include <ta_pub_key.h>
+#include <tee/uuid.h>
 #include <trace.h>
+#include <types_ext.h>
 #include <utee_defines.h>
 #include <util.h>
 
@@ -129,9 +130,11 @@ out:
 
 static uint32_t elf_flags_to_mattr(uint32_t flags, bool init_attrs)
 {
-	uint32_t mattr = TEE_MATTR_PRW;
+	uint32_t mattr = 0;
 
-	if (!init_attrs) {
+	if (init_attrs)
+		mattr = TEE_MATTR_PRW;
+	else {
 		if (flags & PF_X)
 			mattr |= TEE_MATTR_UX;
 		if (flags & PF_W)
@@ -170,8 +173,9 @@ static TEE_Result config_final_paging(struct user_ta_ctx *utc)
 		utc->mmu->table[n].attr |= TEE_MATTR_PAGED;
 		flags = utc->mmu->table[n].attr &
 			(TEE_MATTR_PRW | TEE_MATTR_URWX);
-		if (!tee_pager_set_uta_area(utc, utc->mmu->table[n].va,
-					    utc->mmu->table[n].size, flags))
+		if (!tee_pager_set_uta_area_attr(utc, utc->mmu->table[n].va,
+						 utc->mmu->table[n].size,
+						 flags))
 			return TEE_ERROR_GENERIC;
 	}
 	return TEE_SUCCESS;
@@ -672,7 +676,7 @@ static TEE_Result rpc_load(const TEE_UUID *uuid, struct shdr **ta,
 
 	memset(params, 0, sizeof(params));
 	params[0].attr = OPTEE_MSG_ATTR_TYPE_VALUE_INPUT;
-	memcpy(&params[0].u.value, uuid, sizeof(TEE_UUID));
+	tee_uuid_to_octets((void *)&params[0].u.value, uuid);
 	params[1].attr = OPTEE_MSG_ATTR_TYPE_TMEM_OUTPUT;
 	params[1].u.tmem.buf_ptr = 0;
 	params[1].u.tmem.size = 0;
@@ -694,7 +698,7 @@ static TEE_Result rpc_load(const TEE_UUID *uuid, struct shdr **ta,
 	*cookie_ta = cta;
 
 	params[0].attr = OPTEE_MSG_ATTR_TYPE_VALUE_INPUT;
-	memcpy(&params[0].u.value, uuid, sizeof(TEE_UUID));
+	tee_uuid_to_octets((void *)&params[0].u.value, uuid);
 	params[1].attr = OPTEE_MSG_ATTR_TYPE_TMEM_OUTPUT;
 	params[1].u.tmem.buf_ptr = phta;
 	params[1].u.tmem.shm_ref = cta;
@@ -755,8 +759,9 @@ static void user_ta_dump_state(struct tee_ta_ctx *ctx)
 	EMSG_RAW("- stack: 0x%" PRIxVA " %zu",
 		 utc->mmu->table[0].va, utc->stack_size);
 	for (n = 0; n < utc->mmu->size; n++)
-		EMSG_RAW("sect %zu : %#" PRIxVA " %zu",
-			 n, utc->mmu->table[n].va, utc->mmu->table[n].size);
+		EMSG_RAW("sect %zu : va %#" PRIxVA " pa %#" PRIxPA " %#zx",
+			 n, utc->mmu->table[n].va, utc->mmu->table[n].pa,
+			 utc->mmu->table[n].size);
 }
 KEEP_PAGER(user_ta_dump_state);
 

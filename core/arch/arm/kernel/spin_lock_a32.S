@@ -1,5 +1,7 @@
 /*
- * Copyright (c) 2015, Linaro Limited
+ * Copyright (c) 2016, Linaro Limited
+ * Copyright (c) 2016, ARM Limited and Contributors. All rights reserved.
+ * Copyright (c) 2014, STMicroelectronics International N.V.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -11,6 +13,10 @@
  * 2. Redistributions in binary form must reproduce the above copyright notice,
  * this list of conditions and the following disclaimer in the documentation
  * and/or other materials provided with the distribution.
+ *
+ * Neither the name of ARM nor the names of its contributors may be used
+ * to endorse or promote products derived from this software without specific
+ * prior written permission.
  *
  * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
  * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
@@ -24,37 +30,56 @@
  * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
  * POSSIBILITY OF SUCH DAMAGE.
  */
-#ifndef KEEP_H
-#define KEEP_H
 
-#ifdef ASM
+#include <asm.S>
+#include <kernel/spinlock.h>
+#include <kernel/unwind.h>
 
-	.macro KEEP_PAGER sym
-	.pushsection __keep_meta_vars_pager
-	___keep_pager_\sym:
-	.long	\sym
-	.popsection
-	.endm
+/* void __cpu_spin_lock(unsigned int *lock) */
+FUNC __cpu_spin_lock , :
+UNWIND(	.fnstart)
+	mov r2, #SPINLOCK_LOCK
+1:
+	ldrex r1, [r0]
+	cmp r1, #SPINLOCK_UNLOCK
+	wfene
+	strexeq r1, r2, [r0]
+	cmpeq r1, #0
+	bne 1b
+	dmb
+	bx lr
+UNWIND(	.fnend)
+END_FUNC __cpu_spin_lock
 
-	.macro KEEP_INIT sym
-	.pushsection __keep_meta_vars_init
-	___keep_init_\sym:
-	.long	\sym
-	.popsection
-	.endm
+/* int __cpu_spin_trylock(unsigned int *lock) - return 0 on success */
+FUNC __cpu_spin_trylock , :
+UNWIND(	.fnstart)
+	mov r2, #SPINLOCK_LOCK
+	mov r1, r0
+1:
+	ldrex r0, [r1]
+	cmp r0, #0
+	bne 1f
+	strex r0, r2, [r1]
+	cmp r0, #0
+	bne 1b
+	dmb
+	bx lr
+1:
+	clrex
+	dmb
+	bx lr
+UNWIND(	.fnend)
+END_FUNC __cpu_spin_trylock
 
-#else
-
-#include <compiler.h>
-
-#define KEEP_PAGER(sym) \
-	const unsigned long ____keep_pager_##sym  \
-		__section("__keep_meta_vars_pager") = (unsigned long)&sym
-
-#define KEEP_INIT(sym) \
-	const unsigned long ____keep_init_##sym  \
-		__section("__keep_meta_vars_init") = (unsigned long)&sym
-
-#endif /* ASM */
-
-#endif /*KEEP_H*/
+/* void __cpu_spin_unlock(unsigned int *lock) */
+FUNC __cpu_spin_unlock , :
+UNWIND(	.fnstart)
+	dmb
+	mov r1, #SPINLOCK_UNLOCK
+	str r1, [r0]
+	dsb
+	sev
+	bx lr
+UNWIND(	.fnend)
+END_FUNC __cpu_spin_unlock

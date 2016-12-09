@@ -243,10 +243,16 @@ static uint32_t mattr_to_texcb(uint32_t attr)
 
 static uint32_t desc_to_mattr(unsigned level, uint32_t desc)
 {
-	uint32_t a = TEE_MATTR_VALID_BLOCK;
+	uint32_t a;
 
 	switch (get_desc_type(level, desc)) {
+	case DESC_TYPE_PAGE_TABLE:
+		a = TEE_MATTR_TABLE;
+		if (!(desc & SECTION_PT_NOTSECURE))
+			a |= TEE_MATTR_SECURE;
+		break;
 	case DESC_TYPE_SECTION:
+		a = TEE_MATTR_VALID_BLOCK;
 		if (desc & SECTION_ACCESS_FLAG)
 			a |= TEE_MATTR_PRX | TEE_MATTR_URX;
 
@@ -269,6 +275,7 @@ static uint32_t desc_to_mattr(unsigned level, uint32_t desc)
 
 		break;
 	case DESC_TYPE_SMALL_PAGE:
+		a = TEE_MATTR_VALID_BLOCK;
 		if (desc & SMALL_PAGE_ACCESS_FLAG)
 			a |= TEE_MATTR_PRX | TEE_MATTR_URX;
 
@@ -397,18 +404,24 @@ void core_mmu_set_info_table(struct core_mmu_table_info *tbl_info,
 	}
 }
 
+void core_mmu_get_user_pgdir(struct core_mmu_table_info *pgd_info)
+{
+	void *tbl = (void *)core_mmu_get_ul1_ttb_va();
+
+	core_mmu_set_info_table(pgd_info, 1, 0, tbl);
+	pgd_info->num_entries = TEE_MMU_UL1_NUM_ENTRIES;
+}
+
 void core_mmu_create_user_map(struct user_ta_ctx *utc,
 			      struct core_mmu_user_map *map)
 {
 	struct core_mmu_table_info dir_info;
-	void *tbl = (void *)core_mmu_get_ul1_ttb_va();
 
 	COMPILE_TIME_ASSERT(sizeof(uint32_t) * TEE_MMU_L2_NUM_ENTRIES ==
 			    PGT_SIZE);
 
-	core_mmu_set_info_table(&dir_info, 1, 0, tbl);
-	dir_info.num_entries = TEE_MMU_UL1_NUM_ENTRIES;
-	memset(tbl, 0, sizeof(uint32_t) * TEE_MMU_UL1_NUM_ENTRIES);
+	core_mmu_get_user_pgdir(&dir_info);
+	memset(dir_info.table, 0, dir_info.num_entries * sizeof(uint32_t));
 	core_mmu_populate_user_map(&dir_info, utc);
 	map->ttbr0 = core_mmu_get_ul1_ttb_pa() | TEE_MMU_DEFAULT_ATTRS;
 	map->ctxid = utc->context & 0xff;

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, Linaro Limited
+ * Copyright (c) 2016, Linaro Limited
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -24,37 +24,40 @@
  * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
  * POSSIBILITY OF SUCH DAMAGE.
  */
-#ifndef KEEP_H
-#define KEEP_H
 
-#ifdef ASM
+#include <assert.h>
+#include <kernel/spinlock.h>
+#include "thread_private.h"
 
-	.macro KEEP_PAGER sym
-	.pushsection __keep_meta_vars_pager
-	___keep_pager_\sym:
-	.long	\sym
-	.popsection
-	.endm
+void spinlock_count_incr(void)
+{
+	struct thread_core_local *l = thread_get_core_local();
 
-	.macro KEEP_INIT sym
-	.pushsection __keep_meta_vars_init
-	___keep_init_\sym:
-	.long	\sym
-	.popsection
-	.endm
+	l->locked_count++;
+	assert(l->locked_count);
+}
 
-#else
+void spinlock_count_decr(void)
+{
+	struct thread_core_local *l = thread_get_core_local();
 
-#include <compiler.h>
+	assert(l->locked_count);
+	l->locked_count--;
+}
 
-#define KEEP_PAGER(sym) \
-	const unsigned long ____keep_pager_##sym  \
-		__section("__keep_meta_vars_pager") = (unsigned long)&sym
+bool have_spinlock(void)
+{
+	struct thread_core_local *l;
 
-#define KEEP_INIT(sym) \
-	const unsigned long ____keep_init_##sym  \
-		__section("__keep_meta_vars_init") = (unsigned long)&sym
+	if (!thread_irq_disabled()) {
+		/*
+		 * Normally we can't be holding a spinlock since doing so would
+		 * imply IRQ are disabled (or the spinlock logic is flawed).
+		 */
+		return false;
+	}
 
-#endif /* ASM */
+	l = thread_get_core_local();
 
-#endif /*KEEP_H*/
+	return !!l->locked_count;
+}

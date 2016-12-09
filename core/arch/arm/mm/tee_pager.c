@@ -32,10 +32,10 @@
 #include <sys/queue.h>
 #include <kernel/abort.h>
 #include <kernel/panic.h>
+#include <kernel/spinlock.h>
 #include <kernel/tee_misc.h>
 #include <kernel/tee_ta_manager.h>
 #include <kernel/thread.h>
-#include <kernel/tz_proc.h>
 #include <mm/core_memprot.h>
 #include <mm/tee_mm.h>
 #include <mm/tee_mmu_defs.h>
@@ -178,7 +178,7 @@ static struct pgt pager_core_pgt;
 struct core_mmu_table_info tee_pager_tbl_info;
 static struct core_mmu_table_info pager_alias_tbl_info;
 
-static unsigned pager_lock = SPINLOCK_UNLOCK;
+static unsigned pager_spinlock = SPINLOCK_UNLOCK;
 
 /* Defines the range of the alias area */
 static tee_mm_entry_t *pager_alias_area;
@@ -188,6 +188,20 @@ static tee_mm_entry_t *pager_alias_area;
  * @pager_alias_next_free is != 0
  */
 static uintptr_t pager_alias_next_free;
+
+static uint32_t pager_lock(void)
+{
+	uint32_t exceptions = thread_mask_exceptions(THREAD_EXCP_ALL);
+
+	cpu_spin_lock(&pager_spinlock);
+	return exceptions;
+}
+
+static void pager_unlock(uint32_t exceptions)
+{
+	cpu_spin_unlock(&pager_spinlock);
+	thread_set_exceptions(exceptions);
+}
 
 static void set_alias_area(tee_mm_entry_t *mm)
 {
@@ -318,14 +332,11 @@ bad:
 
 static void area_insert_tail(struct tee_pager_area *area)
 {
-	uint32_t exceptions = thread_mask_exceptions(THREAD_EXCP_ALL);
-
-	cpu_spin_lock(&pager_lock);
+	uint32_t exceptions = pager_lock();
 
 	TAILQ_INSERT_TAIL(&tee_pager_area_head, area, link);
 
-	cpu_spin_unlock(&pager_lock);
-	thread_set_exceptions(exceptions);
+	pager_unlock(exceptions);
 }
 KEEP_PAGER(area_insert_tail);
 
@@ -385,63 +396,6 @@ bool tee_pager_add_core_area(vaddr_t base, size_t size, uint32_t flags,
 	area_insert_tail(area);
 	return true;
 }
-
-#ifdef CFG_PAGED_USER_TA
-bool tee_pager_add_uta_area(struct user_ta_ctx *utc, vaddr_t base, size_t size)
-{
-	struct tee_pager_area *area;
-	uint32_t flags;
-	vaddr_t b = base;
-	size_t s = size;
-
-	if (!utc->areas) {
-		utc->areas = malloc(sizeof(*utc->areas));
-		if (!utc->areas)
-			return false;
-		TAILQ_INIT(utc->areas);
-	}
-
-	flags = TEE_MATTR_PRW | TEE_MATTR_URWX;
-
-	while (s) {
-		size_t s2;
-
-		s2 = MIN(CORE_MMU_PGDIR_SIZE - (b & CORE_MMU_PGDIR_MASK), s);
-
-		/* Table info will be set when the context is activated. */
-		area = alloc_area(NULL, b, s2, flags, NULL, NULL);
-		if (!area)
-			return false;
-		TAILQ_INSERT_TAIL(utc->areas, area, link);
-		b += s2;
-		s -= s2;
-	}
-
-	return true;
-}
-
-void tee_pager_rem_uta_areas(struct user_ta_ctx *utc)
-{
-	struct tee_pager_area *area;
-
-	if (!utc->areas)
-		return;
-
-	while (true) {
-		area = TAILQ_FIRST(utc->areas);
-		if (!area)
-			break;
-		TAILQ_REMOVE(utc->areas, area, link);
-		tee_mm_free(tee_mm_find(&tee_mm_sec_ddr,
-					virt_to_phys(area->store)));
-		if (area->type == AREA_TYPE_RW)
-			free(area->u.rwp);
-		free(area);
-	}
-
-	free(utc->areas);
-}
-#endif /*CFG_PAGED_USER_TA*/
 
 static struct tee_pager_area *find_area(struct tee_pager_area_head *areas,
 					vaddr_t va)
@@ -622,8 +576,77 @@ static vaddr_t __maybe_unused area_idx2va(struct tee_pager_area *area,
 }
 
 #ifdef CFG_PAGED_USER_TA
-bool tee_pager_set_uta_area(struct user_ta_ctx *utc, vaddr_t base, size_t size,
-			    uint32_t flags)
+static void free_area(struct tee_pager_area *area)
+{
+	tee_mm_free(tee_mm_find(&tee_mm_sec_ddr,
+				virt_to_phys(area->store)));
+	if (area->type == AREA_TYPE_RW)
+		free(area->u.rwp);
+	free(area);
+}
+
+static bool pager_add_uta_area(struct user_ta_ctx *utc, vaddr_t base,
+			       size_t size)
+{
+	struct tee_pager_area *area;
+	uint32_t flags;
+	vaddr_t b = base;
+	size_t s = size;
+
+	if (!utc->areas) {
+		utc->areas = malloc(sizeof(*utc->areas));
+		if (!utc->areas)
+			return false;
+		TAILQ_INIT(utc->areas);
+	}
+
+	flags = TEE_MATTR_PRW | TEE_MATTR_URWX;
+
+	while (s) {
+		size_t s2;
+
+		if (find_area(utc->areas, b))
+			return false;
+
+		s2 = MIN(CORE_MMU_PGDIR_SIZE - (b & CORE_MMU_PGDIR_MASK), s);
+
+		/* Table info will be set when the context is activated. */
+		area = alloc_area(NULL, b, s2, flags, NULL, NULL);
+		if (!area)
+			return false;
+		TAILQ_INSERT_TAIL(utc->areas, area, link);
+		b += s2;
+		s -= s2;
+	}
+
+	return true;
+}
+
+bool tee_pager_add_uta_area(struct user_ta_ctx *utc, vaddr_t base, size_t size)
+{
+	return pager_add_uta_area(utc, base, size);
+}
+
+void tee_pager_rem_uta_areas(struct user_ta_ctx *utc)
+{
+	struct tee_pager_area *area;
+
+	if (!utc->areas)
+		return;
+
+	while (true) {
+		area = TAILQ_FIRST(utc->areas);
+		if (!area)
+			break;
+		TAILQ_REMOVE(utc->areas, area, link);
+		free_area(area);
+	}
+
+	free(utc->areas);
+}
+
+bool tee_pager_set_uta_area_attr(struct user_ta_ctx *utc, vaddr_t base,
+				 size_t size, uint32_t flags)
 {
 	bool ret;
 	vaddr_t b = base;
@@ -641,8 +664,7 @@ bool tee_pager_set_uta_area(struct user_ta_ctx *utc, vaddr_t base, size_t size,
 		f |= TEE_MATTR_PW;
 	f = get_area_mattr(f);
 
-	exceptions = thread_mask_exceptions(THREAD_EXCP_ALL);
-	cpu_spin_lock(&pager_lock);
+	exceptions = pager_lock();
 
 	while (s) {
 		s2 = MIN(CORE_MMU_PGDIR_SIZE - (b & CORE_MMU_PGDIR_MASK), s);
@@ -677,11 +699,10 @@ bool tee_pager_set_uta_area(struct user_ta_ctx *utc, vaddr_t base, size_t size,
 
 	ret = true;
 out:
-	cpu_spin_unlock(&pager_lock);
-	thread_set_exceptions(exceptions);
+	pager_unlock(exceptions);
 	return ret;
 }
-KEEP_PAGER(tee_pager_set_uta_area);
+KEEP_PAGER(tee_pager_set_uta_area_attr);
 #endif /*CFG_PAGED_USER_TA*/
 
 static bool tee_pager_unhide_page(vaddr_t page_va)
@@ -979,8 +1000,7 @@ bool tee_pager_handle_fault(struct abort_info *ai)
 	 * page, instead we use the aliased mapping to populate the page
 	 * and once everything is ready we map it.
 	 */
-	exceptions = thread_mask_exceptions(THREAD_EXCP_IRQ);
-	cpu_spin_lock(&pager_lock);
+	exceptions = pager_lock();
 
 	stat_handle_fault();
 
@@ -1065,8 +1085,7 @@ bool tee_pager_handle_fault(struct abort_info *ai)
 	tee_pager_hide_pages();
 	ret = true;
 out:
-	cpu_spin_unlock(&pager_lock);
-	thread_unmask_exceptions(exceptions);
+	pager_unlock(exceptions);
 	return ret;
 }
 
@@ -1155,15 +1174,26 @@ void tee_pager_assign_uta_tables(struct user_ta_ctx *utc)
 	}
 }
 
+static void pager_save_and_release_entry(struct tee_pager_pmem *pmem)
+{
+	uint32_t attr;
+
+	assert(pmem->area && pmem->area->pgt);
+
+	area_get_entry(pmem->area, pmem->pgidx, NULL, &attr);
+	area_set_entry(pmem->area, pmem->pgidx, 0, 0);
+	tee_pager_save_page(pmem, attr);
+	assert(pmem->area->pgt->num_used_entries);
+	pmem->area->pgt->num_used_entries--;
+	pmem->pgidx = INVALID_PGIDX;
+	pmem->area = NULL;
+}
+
 void tee_pager_pgt_save_and_release_entries(struct pgt *pgt)
 {
 	struct tee_pager_pmem *pmem;
 	struct tee_pager_area *area;
-	uint32_t exceptions;
-	uint32_t attr;
-
-	exceptions = thread_mask_exceptions(THREAD_EXCP_IRQ);
-	cpu_spin_lock(&pager_lock);
+	uint32_t exceptions = pager_lock();
 
 	if (!pgt->num_used_entries)
 		goto out;
@@ -1171,14 +1201,8 @@ void tee_pager_pgt_save_and_release_entries(struct pgt *pgt)
 	TAILQ_FOREACH(pmem, &tee_pager_pmem_head, link) {
 		if (!pmem->area || pmem->pgidx == INVALID_PGIDX)
 			continue;
-		if (pmem->area->pgt == pgt) {
-			area_get_entry(pmem->area, pmem->pgidx, NULL, &attr);
-			area_set_entry(pmem->area, pmem->pgidx, 0, 0);
-			tee_pager_save_page(pmem, attr);
-			pmem->pgidx = INVALID_PGIDX;
-			pmem->area = NULL;
-			pgt->num_used_entries--;
-		}
+		if (pmem->area->pgt == pgt)
+			pager_save_and_release_entry(pmem);
 	}
 	assert(!pgt->num_used_entries);
 
@@ -1190,8 +1214,7 @@ out:
 		}
 	}
 
-	cpu_spin_unlock(&pager_lock);
-	thread_unmask_exceptions(exceptions);
+	pager_unlock(exceptions);
 }
 KEEP_PAGER(tee_pager_pgt_save_and_release_entries);
 #endif /*CFG_PAGED_USER_TA*/
@@ -1213,8 +1236,7 @@ void tee_pager_release_phys(void *addr, size_t size)
 	    area != find_area(&tee_pager_area_head, end - SMALL_PAGE_SIZE))
 		panic();
 
-	exceptions = thread_mask_exceptions(THREAD_EXCP_ALL);
-	cpu_spin_lock(&pager_lock);
+	exceptions = pager_lock();
 
 	for (va = begin; va < end; va += SMALL_PAGE_SIZE)
 		unmaped |= tee_pager_release_one_phys(area, va);
@@ -1223,8 +1245,7 @@ void tee_pager_release_phys(void *addr, size_t size)
 	if (unmaped)
 		core_tlb_maintenance(TLBINV_UNIFIEDTLB, 0);
 
-	cpu_spin_unlock(&pager_lock);
-	thread_set_exceptions(exceptions);
+	pager_unlock(exceptions);
 }
 KEEP_PAGER(tee_pager_release_phys);
 
