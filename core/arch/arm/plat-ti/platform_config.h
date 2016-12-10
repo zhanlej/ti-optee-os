@@ -72,6 +72,7 @@
 #if defined(PLATFORM_FLAVOR_am57xx)
 
 /* UART3 */
+#undef CONSOLE_UART_BASE
 #define CONSOLE_UART_BASE       UART3_BASE
 
 #endif
