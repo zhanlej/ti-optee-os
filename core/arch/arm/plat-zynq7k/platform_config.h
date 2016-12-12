@@ -1,6 +1,4 @@
 /*
- * Copyright (C) 2015 Freescale Semiconductor, Inc.
- * All rights reserved.
  * Copyright (c) 2016, Wind River Systems.
  * All rights reserved.
  *
@@ -32,133 +30,49 @@
 
 #define STACK_ALIGNMENT			64
 
-/* For i.MX 6UltraLite EVK board */
+/* For Zynq7000 board */
 
-#if defined(PLATFORM_FLAVOR_mx6ulevk)
-
-#ifdef CFG_WITH_PAGER
-#error "Pager not supported for platform mx6ulevk"
-#endif
-#ifdef CFG_WITH_LPAE
-#error "LPAE not supported for now"
-#endif
-
-#define GIC_BASE			0xA00000
-#define GIC_SIZE			0x8000
-#define GICC_OFFSET			0x2000
-#define GICD_OFFSET			0x1000
-#define UART0_BASE			0x2020000
-#define UART1_BASE			0x21E8000
-#define UART2_BASE			0x21EC000
-
-#define AHB1_BASE			0x02000000
-#define AHB1_SIZE			0x100000
-#define AHB2_BASE			0x02100000
-#define AHB2_SIZE			0x100000
-#define AHB3_BASE			0x02200000
-#define AHB3_SIZE			0x100000
-
-#define AIPS_TZ1_BASE_ADDR	0x02000000
-#define AIPS1_OFF_BASE_ADDR	(AIPS_TZ1_BASE_ADDR + 0x80000)
-
-#define DRAM0_BASE			0x80000000
-#define DRAM0_SIZE			0x20000000
-
-#define CFG_TEE_CORE_NB_CORE		1
-
-#define DDR_PHYS_START			DRAM0_BASE
-#define DDR_SIZE			DRAM0_SIZE
-
-#define CFG_DDR_START			DDR_PHYS_START
-#define CFG_DDR_SIZE			DDR_SIZE
-
-/* Full GlobalPlatform test suite requires CFG_SHMEM_SIZE to be at least 2MB */
-#define CFG_SHMEM_START			(TZDRAM_BASE - 0x100000)
-#define CFG_SHMEM_SIZE			0x100000
-
-/* Location of trusted dram on imx */
-#define TZDRAM_BASE			(0x9c100000)
-#define TZDRAM_SIZE			(0x03000000)
-
-#define CFG_TEE_RAM_VA_SIZE		(1024 * 1024)
-
-#ifndef CFG_TEE_LOAD_ADDR
-#define CFG_TEE_LOAD_ADDR		CFG_TEE_RAM_START
-#endif
-
-/*
- * Everything is in TZDRAM.
- * +------------------+
- * |        | TEE_RAM |
- * + TZDRAM +---------+
- * |        | TA_RAM  |
- * +--------+---------+
- */
-#define CFG_TEE_RAM_PH_SIZE	CFG_TEE_RAM_VA_SIZE
-#define CFG_TEE_RAM_START	TZDRAM_BASE
-#define CFG_TA_RAM_START	ROUNDUP((TZDRAM_BASE + CFG_TEE_RAM_VA_SIZE), \
-						CORE_MMU_DEVICE_SIZE)
-#define CFG_TA_RAM_SIZE		ROUNDDOWN((TZDRAM_SIZE - CFG_TEE_RAM_VA_SIZE), \
-						CORE_MMU_DEVICE_SIZE)
-
-#define DEVICE0_PA_BASE		ROUNDDOWN(UART0_BASE, \
-						CORE_MMU_DEVICE_SIZE)
-#define DEVICE0_VA_BASE		(64 * 1024 * 1024)
-#define DEVICE0_SIZE		CORE_MMU_DEVICE_SIZE
-#define DEVICE0_TYPE		MEM_AREA_IO_NSEC
-
-/*
- * console uart virtual address
- * The physical address is 0x2020000, we mapped it to 0x4020000,
- * see DEVICE0_VA_BASE and DEVICE0_PA_BASE
- */
-#define CONSOLE_UART_BASE		(0x4020000)
-#define CONSOLE_UART_PA_BASE		(UART0_BASE)
-
-/* For i.MX6 Quad SABRE Lite and Smart Device board */
-
-#elif defined(PLATFORM_FLAVOR_mx6qsabrelite) || \
-	defined(PLATFORM_FLAVOR_mx6qsabresd)
-
-#define SCU_BASE			0x00A00000
-#define PL310_BASE			0x00A02000
-#define SRC_BASE			0x020D8000
-#define SRC_SCR				0x000
-#define SRC_GPR1			0x020
-#define SRC_SCR_CPU_ENABLE_ALL		SHIFT_U32(0x7, 22)
-#define GIC_BASE			0x00A00000
+#define SCU_BASE			0xF8F00000
+#define PL310_BASE			0xF8F02000
+#define GIC_BASE			0xF8F00000
 #define GICC_OFFSET			0x100
 #define GICD_OFFSET			0x1000
 #define GIC_CPU_BASE			(GIC_BASE + GICC_OFFSET)
 #define GIC_DIST_BASE			(GIC_BASE + GICD_OFFSET)
-#define UART1_BASE			0x02020000
-#define UART2_BASE			0x021E8000
 
-/* Central Security Unit register values */
-#define CSU_BASE			0x021C0000
-#define CSU_CSL_START			0x0
-#define CSU_CSL_END			0xA0
-#define CSU_CSL5			0x14
-#define CSU_CSL16			0x40
-#define	CSU_ACCESS_ALL			0x00FF00FF
-#define CSU_SETTING_LOCK		0x01000100
+#define SLCR_BASE			0xF8000000
+#define SLCR_LOCK			0xF8000004
+#define SLCR_UNLOCK			0xF8000008
+#define SLCR_TZ_DDR_RAM			0xF8000430
+#define SLCR_TZ_DMA_NS			0xF8000440
+#define SLCR_TZ_DMA_IRQ_NS		0xF8000444
+#define SLCR_TZ_DMA_PERIPH_NS		0xF8000448
+#define SLCR_TZ_GEM			0xF8000450
+#define SLCR_TZ_SDIO			0xF8000454
+#define SLCR_TZ_USB			0xF8000458
+#define SLCR_L2C_RAM			0xF8000A1C
 
-#if defined(PLATFORM_FLAVOR_mx6qsabrelite)
-#define CONSOLE_UART_BASE		UART2_BASE
-#define CONSOLE_UART_PA_BASE		UART2_BASE
-#endif
-#if defined(PLATFORM_FLAVOR_mx6qsabresd)
+#define SLCR_LOCK_MAGIC			0x0000767B
+#define SLCR_UNLOCK_MAGIC		0x0000DF0D
+
+#define SECURITY2_SDIO0			0xE0200008
+#define SECURITY3_SDIO1			0xE020000C
+#define SECURITY4_QSPI			0xE0200010
+#define SECURITY6_APB_SLAVES		0xE0200018
+
+#define UART0_BASE			0xE0000000
+#define UART1_BASE			0xE0001000
+
 #define CONSOLE_UART_BASE		UART1_BASE
-#define CONSOLE_UART_PA_BASE		UART1_BASE
-#endif
-#define DRAM0_BASE			0x10000000
-#define DRAM0_SIZE			0x40000000
+
+#define DRAM0_BASE			0x00100000
+#define DRAM0_SIZE			0x3FF00000
 
 #define HEAP_SIZE			(24 * 1024)
 
 #define CFG_TEE_RAM_VA_SIZE		(1024 * 1024)
 
-#define CFG_TEE_CORE_NB_CORE		4
+#define CFG_TEE_CORE_NB_CORE		2
 
 #define DDR_PHYS_START			DRAM0_BASE
 #define DDR_SIZE			DRAM0_SIZE
@@ -201,13 +115,13 @@
  * Event monitor disabled (bit20=0)
  * Platform fmavor specific way config:
  * - 64kb way size (bit19:17=3b011)
- * - 16-way associciativity (bit16=1)
+ * - 8-way associciativity (bit16=0)
  * Store buffer device limitation enabled (bit11=1)
  * Cacheable accesses have high prio (bit10=0)
  * Full Line Zero (FLZ) disabled (bit0=0)
  */
 #ifndef PL310_AUX_CTRL_INIT
-#define PL310_AUX_CTRL_INIT		0x3C470800
+#define PL310_AUX_CTRL_INIT		0x3C460800
 #endif
 
 /*
@@ -234,7 +148,7 @@
  *
  * Invalidate all registers
  */
-#define	SCU_INV_CTRL_INIT		0xFFFFFFFF
+#define SCU_INV_CTRL_INIT		0xFFFFFFFF
 
 /*
  * SCU Access Register
@@ -247,6 +161,15 @@
  * - both nonsec cpu access SCU, private and global timer
  */
 #define SCU_NSAC_CTRL_INIT		0x00000FFF
+
+/* all bit enabled in access control register */
+#define ACCESS_BITS_ALL			0xFFFFFFFF
+
+/* recommended value for setting the L2C_RAM register */
+#define SLCR_L2C_RAM_VALUE		0x00020202
+
+/* place in OCRAM to write secondary entry to */
+#define SECONDARY_ENTRY_DROP		0xFFFFFFF0
 
 /* define the memory areas */
 
@@ -273,31 +196,31 @@
  *  PUB_RAM : default 2MByte
  */
 
-/* emulated SRAM, at start of secure DDR */
+/* emulated SRAM, 256K at start of secure DDR */
 
-#define CFG_CORE_TZSRAM_EMUL_START	0x4E000000
+#define CFG_CORE_TZSRAM_EMUL_START	0x3E000000
 
 #define TZSRAM_BASE			CFG_CORE_TZSRAM_EMUL_START
 #define TZSRAM_SIZE			CFG_CORE_TZSRAM_EMUL_SIZE
 
 /* Location of trusted dram */
 
-#define CFG_DDR_TEETZ_RESERVED_START	0x4E100000
+#define CFG_DDR_TEETZ_RESERVED_START	0x3E100000
 #define CFG_DDR_TEETZ_RESERVED_SIZE	0x01F00000
 
 #define CFG_PUB_RAM_SIZE		(1 * 1024 * 1024)
 #define CFG_TEE_RAM_PH_SIZE		TZSRAM_SIZE
 
 #define TZDRAM_BASE			(CFG_DDR_TEETZ_RESERVED_START)
-#define TZDRAM_SIZE			(CFG_DDR_TEETZ_RESERVED_SIZE - \
-				CFG_PUB_RAM_SIZE)
-
-#define CFG_TA_RAM_START		TZDRAM_BASE
-#define CFG_TA_RAM_SIZE			TZDRAM_SIZE
+#define TZDRAM_SIZE				(CFG_DDR_TEETZ_RESERVED_SIZE - \
+						CFG_PUB_RAM_SIZE)
 
 #define CFG_SHMEM_START			(CFG_DDR_TEETZ_RESERVED_START + \
 						TZDRAM_SIZE)
 #define CFG_SHMEM_SIZE			CFG_PUB_RAM_SIZE
+
+#define CFG_TA_RAM_START		TZDRAM_BASE
+#define CFG_TA_RAM_SIZE			TZDRAM_SIZE
 
 #define CFG_TEE_RAM_START		TZSRAM_BASE
 
@@ -319,12 +242,12 @@
  *  |   shared memory    |                  |   |
  *  +---------------------------------------+   v
  *
- *  TEE_RAM : default 1MByte
- *  PUB_RAM : default 2MByte
- *  TA_RAM  : all what is left
+ *  TEE_RAM : 1MByte
+ *  PUB_RAM : 1MByte
+ *  TA_RAM  : all what is left (at least 2MByte !)
  */
 
-#define CFG_DDR_TEETZ_RESERVED_START	0x4E000000
+#define CFG_DDR_TEETZ_RESERVED_START	0x3E000000
 #define CFG_DDR_TEETZ_RESERVED_SIZE	0x02000000
 
 #define CFG_PUB_RAM_SIZE		(1 * 1024 * 1024)
@@ -332,16 +255,16 @@
 
 #define TZDRAM_BASE			(CFG_DDR_TEETZ_RESERVED_START)
 #define TZDRAM_SIZE			(CFG_DDR_TEETZ_RESERVED_SIZE - \
-				CFG_PUB_RAM_SIZE)
+						CFG_PUB_RAM_SIZE)
 
 #define CFG_TA_RAM_START		(CFG_DDR_TEETZ_RESERVED_START + \
-				CFG_TEE_RAM_PH_SIZE)
+						CFG_TEE_RAM_PH_SIZE)
 #define CFG_TA_RAM_SIZE			(CFG_DDR_TEETZ_RESERVED_SIZE - \
-				CFG_TEE_RAM_PH_SIZE - \
-				CFG_PUB_RAM_SIZE)
+						CFG_TEE_RAM_PH_SIZE - \
+						CFG_PUB_RAM_SIZE)
 
 #define CFG_SHMEM_START			(CFG_DDR_TEETZ_RESERVED_START + \
-				TZDRAM_SIZE)
+						TZDRAM_SIZE)
 #define CFG_SHMEM_SIZE			CFG_PUB_RAM_SIZE
 
 #define CFG_TEE_RAM_START		TZDRAM_BASE
@@ -351,67 +274,5 @@
 #endif
 
 #endif /* CFG_WITH_PAGER */
-
-#else
-#error "Unknown platform flavor"
-#endif /* defined(PLATFORM_FLAVOR_mx6ulevk) */
-
-#ifdef CFG_PL310
-/*
- * PL310 TAG RAM Control Register
- *
- * bit[10:8]:1 - 2 cycle of write accesses latency
- * bit[6:4]:1 - 2 cycle of read accesses latency
- * bit[2:0]:1 - 2 cycle of setup latency
- */
-#define PL310_TAG_RAM_CTRL_INIT		0x00000111
-
-/*
- * DATA RAM Control Register
- *
- * bit[10:8]:2 - 3 cycle of write accesses latency
- * bit[6:4]:2 - 3 cycle of read accesses latency
- * bit[2:0]:2 - 3 cycle of setup latency
- */
-#define PL310_DATA_RAM_CTRL_INIT	0x00000222
-
-/*
- * Auxiliary Control Register
- *
- * I/Dcache prefetch enabled (bit29:28=2b11)
- * NS can access interrupts (bit27=1)
- * NS can lockown cache lines (bit26=1)
- * Pseudo-random replacement policy (bit25=0)
- * Force write allocated (default)
- * Shared attribute internally ignored (bit22=1, bit13=0)
- * Parity disabled (bit21=0)
- * Event monitor disabled (bit20=0)
- * 64kB ways, 16-way associativity (bit19:17=3b011 bit16=1)
- * Store buffer device limitation enabled (bit11=1)
- * Cacheable accesses have high prio (bit10=0)
- * Full Line Zero (FLZ) disabled (bit0=0)
- */
-#define PL310_AUX_CTRL_INIT		0x3C470800
-
-/*
- * Prefetch Control Register
- *
- * Double linefill disabled (bit30=0)
- * I/D prefetch enabled (bit29:28=2b11)
- * Prefetch drop enabled (bit24=1)
- * Incr double linefill disable (bit23=0)
- * Prefetch offset = 7 (bit4:0)
- */
-#define PL310_PREFETCH_CTRL_INIT	0x31000007
-
-/*
- * Power Register = 0x00000003
- *
- * Dynamic clock gating enabled
- * Standby mode enabled
- */
-#define PL310_POWER_CTRL_INIT		0x00000003
-
-#endif
 
 #endif /*PLATFORM_CONFIG_H*/

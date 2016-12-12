@@ -29,31 +29,28 @@
 
 #include <arm32.h>
 #include <console.h>
-#include <drivers/imx_uart.h>
+#include <drivers/cdns_uart.h>
+#include <drivers/gic.h>
 #include <io.h>
 #include <kernel/generic_boot.h>
 #include <kernel/misc.h>
 #include <kernel/panic.h>
 #include <kernel/pm_stubs.h>
+#include <kernel/tz_ssvce_pl310.h>
 #include <mm/core_mmu.h>
 #include <mm/core_memprot.h>
 #include <platform_config.h>
+#include <platform_smc.h>
 #include <stdint.h>
-#include <sm/optee_smc.h>
 #include <tee/entry_fast.h>
 #include <tee/entry_std.h>
 
-#if defined(PLATFORM_FLAVOR_mx6qsabrelite) || \
-	defined(PLATFORM_FLAVOR_mx6qsabresd)
-#include <drivers/gic.h>
-#include <kernel/tz_ssvce_pl310.h>
-#endif
-
 static void main_fiq(void);
+static void platform_tee_entry_fast(struct thread_smc_args *args);
 
 static const struct thread_handlers handlers = {
 	.std_smc = tee_entry_std,
-	.fast_smc = tee_entry_fast,
+	.fast_smc = platform_tee_entry_fast,
 	.fiq = main_fiq,
 	.cpu_on = pm_panic,
 	.cpu_off = pm_panic,
@@ -63,14 +60,12 @@ static const struct thread_handlers handlers = {
 	.system_reset = pm_panic,
 };
 
-#if defined(PLATFORM_FLAVOR_mx6qsabrelite) || \
-	defined(PLATFORM_FLAVOR_mx6qsabresd)
 static struct gic_data gic_data;
 
 register_phys_mem(MEM_AREA_IO_NSEC, CONSOLE_UART_BASE, CORE_MMU_DEVICE_SIZE);
 register_phys_mem(MEM_AREA_IO_SEC, GIC_BASE, CORE_MMU_DEVICE_SIZE);
 register_phys_mem(MEM_AREA_IO_SEC, PL310_BASE, CORE_MMU_DEVICE_SIZE);
-#endif
+register_phys_mem(MEM_AREA_IO_SEC, SLCR_BASE, CORE_MMU_DEVICE_SIZE);
 
 const struct thread_handlers *generic_boot_get_handlers(void)
 {
@@ -82,21 +77,15 @@ static void main_fiq(void)
 	panic();
 }
 
-#if defined(PLATFORM_FLAVOR_mx6qsabrelite) || \
-	defined(PLATFORM_FLAVOR_mx6qsabresd)
 void plat_cpu_reset_late(void)
 {
-	uintptr_t addr;
-
 	if (!get_core_pos()) {
 		/* primary core */
 #if defined(CFG_BOOT_SECONDARY_REQUEST)
 		/* set secondary entry address and release core */
-		write32(CFG_TEE_LOAD_ADDR, SRC_BASE + SRC_GPR1 + 8);
-		write32(CFG_TEE_LOAD_ADDR, SRC_BASE + SRC_GPR1 + 16);
-		write32(CFG_TEE_LOAD_ADDR, SRC_BASE + SRC_GPR1 + 24);
-
-		write32(SRC_SCR_CPU_ENABLE_ALL, SRC_BASE + SRC_SCR);
+		write32(CFG_TEE_LOAD_ADDR, SECONDARY_ENTRY_DROP);
+		dsb();
+		sev();
 #endif
 
 		/* SCU config */
@@ -108,30 +97,33 @@ void plat_cpu_reset_late(void)
 		write32(read32(SCU_BASE + SCU_CTRL) | 0x1,
 			SCU_BASE + SCU_CTRL);
 
-		/* configure imx6 CSU */
+		/* NS Access control */
+		write32(ACCESS_BITS_ALL, SECURITY2_SDIO0);
+		write32(ACCESS_BITS_ALL, SECURITY3_SDIO1);
+		write32(ACCESS_BITS_ALL, SECURITY4_QSPI);
+		write32(ACCESS_BITS_ALL, SECURITY6_APB_SLAVES);
 
-		/* first grant all peripherals */
-		for (addr = CSU_BASE + CSU_CSL_START;
-			 addr != CSU_BASE + CSU_CSL_END;
-			 addr += 4)
-			write32(CSU_ACCESS_ALL, addr);
+		write32(SLCR_UNLOCK_MAGIC, SLCR_UNLOCK);
 
-		/* lock the settings */
-		for (addr = CSU_BASE + CSU_CSL_START;
-			 addr != CSU_BASE + CSU_CSL_END;
-			 addr += 4)
-			write32(read32(addr) | CSU_SETTING_LOCK, addr);
+		write32(ACCESS_BITS_ALL, SLCR_TZ_DDR_RAM);
+		write32(ACCESS_BITS_ALL, SLCR_TZ_DMA_NS);
+		write32(ACCESS_BITS_ALL, SLCR_TZ_DMA_IRQ_NS);
+		write32(ACCESS_BITS_ALL, SLCR_TZ_DMA_PERIPH_NS);
+		write32(ACCESS_BITS_ALL, SLCR_TZ_GEM);
+		write32(ACCESS_BITS_ALL, SLCR_TZ_SDIO);
+		write32(ACCESS_BITS_ALL, SLCR_TZ_USB);
+
+		write32(SLCR_LOCK_MAGIC, SLCR_LOCK);
 	}
 }
-#endif
 
 static vaddr_t console_base(void)
 {
-	static void *va;
+	static void *va __early_bss;
 
 	if (cpu_mmu_enabled()) {
 		if (!va)
-			va = phys_to_virt(CONSOLE_UART_PA_BASE,
+			va = phys_to_virt(CONSOLE_UART_BASE,
 					  MEM_AREA_IO_NSEC);
 		return (vaddr_t)va;
 	}
@@ -140,30 +132,20 @@ static vaddr_t console_base(void)
 
 void console_init(void)
 {
-	vaddr_t base = console_base();
-
-	imx_uart_init(base);
 }
 
 void console_putc(int ch)
 {
-	vaddr_t base = console_base();
-
-	/* If \n, also do \r */
 	if (ch == '\n')
-		imx_uart_putc('\r', base);
-	imx_uart_putc(ch, base);
+		cdns_uart_putc('\r', console_base());
+	cdns_uart_putc(ch, console_base());
 }
 
 void console_flush(void)
 {
-	vaddr_t base = console_base();
-
-	imx_uart_flush_tx_fifo(base);
+	cdns_uart_flush(console_base());
 }
 
-#if defined(PLATFORM_FLAVOR_mx6qsabrelite) || \
-	defined(PLATFORM_FLAVOR_mx6qsabresd)
 vaddr_t pl310_base(void)
 {
 	static void *va __early_bss;
@@ -174,6 +156,40 @@ vaddr_t pl310_base(void)
 		return (vaddr_t)va;
 	}
 	return PL310_BASE;
+}
+
+void arm_cl2_config(vaddr_t pl310_base)
+{
+	/* Disable PL310 */
+	write32(0, pl310_base + PL310_CTRL);
+
+	/*
+	 * Xilinx AR#54190 recommends setting L2C RAM in SLCR
+	 * to 0x00020202 for proper cache operations.
+	 */
+	write32(SLCR_L2C_RAM_VALUE, SLCR_L2C_RAM);
+
+	write32(PL310_TAG_RAM_CTRL_INIT, pl310_base + PL310_TAG_RAM_CTRL);
+	write32(PL310_DATA_RAM_CTRL_INIT, pl310_base + PL310_DATA_RAM_CTRL);
+	write32(PL310_AUX_CTRL_INIT, pl310_base + PL310_AUX_CTRL);
+	write32(PL310_PREFETCH_CTRL_INIT, pl310_base + PL310_PREFETCH_CTRL);
+	write32(PL310_POWER_CTRL_INIT, pl310_base + PL310_POWER_CTRL);
+
+	/* invalidate all cache ways */
+	arm_cl2_invbyway(pl310_base);
+}
+
+void arm_cl2_enable(vaddr_t pl310_base)
+{
+	uint32_t val;
+
+	/* Enable PL310 ctrl -> only set lsb bit */
+	write32(1, pl310_base + PL310_CTRL);
+
+	/* if L2 FLZW enable, enable in L1 */
+	val = read32(pl310_base + PL310_AUX_CTRL);
+	if (val & 1)
+		write_actlr(read_actlr() | (1 << 3));
 }
 
 void main_init_gic(void)
@@ -198,4 +214,63 @@ void main_secondary_init_gic(void)
 {
 	gic_cpu_init(&gic_data);
 }
-#endif
+
+static vaddr_t slcr_access_range[] = {
+	0x004, 0x008,	/* lock, unlock */
+	0x100, 0x1FF,	/* PLL */
+	0x200, 0x2FF,	/* Reset */
+	0xA00, 0xAFF	/* L2C */
+};
+
+static uint32_t write_slcr(uint32_t addr, uint32_t val)
+{
+	uint32_t i;
+
+	for (i = 0; i < ARRAY_SIZE(slcr_access_range); i += 2) {
+		if (addr >= slcr_access_range[i] &&
+		    addr <= slcr_access_range[i+1]) {
+			static vaddr_t va __early_bss;
+
+			if (!va)
+				va = (vaddr_t)phys_to_virt(SLCR_BASE,
+							   MEM_AREA_IO_SEC);
+			write32(val, va + addr);
+			return OPTEE_SMC_RETURN_OK;
+		}
+	}
+	return OPTEE_SMC_RETURN_EBADADDR;
+}
+
+static uint32_t read_slcr(uint32_t addr, uint32_t *val)
+{
+	uint32_t i;
+
+	for (i = 0; i < ARRAY_SIZE(slcr_access_range); i += 2) {
+		if (addr >= slcr_access_range[i] &&
+		    addr <= slcr_access_range[i+1]) {
+			static vaddr_t va __early_bss;
+
+			if (!va)
+				va = (vaddr_t)phys_to_virt(SLCR_BASE,
+							   MEM_AREA_IO_SEC);
+			*val = read32(va + addr);
+			return OPTEE_SMC_RETURN_OK;
+		}
+	}
+	return OPTEE_SMC_RETURN_EBADADDR;
+}
+
+static void platform_tee_entry_fast(struct thread_smc_args *args)
+{
+	switch (args->a0) {
+	case ZYNQ7K_SMC_SLCR_WRITE:
+		args->a0 = write_slcr(args->a1, args->a2);
+		break;
+	case ZYNQ7K_SMC_SLCR_READ:
+		args->a0 = read_slcr(args->a1, &args->a2);
+		break;
+	default:
+		tee_entry_fast(args);
+		break;
+	}
+}

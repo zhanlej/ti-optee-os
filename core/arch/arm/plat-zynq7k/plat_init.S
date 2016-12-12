@@ -42,6 +42,8 @@
 #include <kernel/unwind.h>
 #include <platform_config.h>
 
+#define ZYNQ_SLCR_L2C_RAM	0xF8000A1C
+
 .section .text
 .balign 4
 .code 32
@@ -66,7 +68,7 @@ UNWIND(	.fnstart)
 	 * Secure World [bit0: NS=0]
 	 */
 	mov r0, #SCR_AW
-	write_scr r0
+	write_scr r0		/* write Secure Configuration Register */
 
 	/*
 	 * Mandated HW config loaded
@@ -96,7 +98,7 @@ UNWIND(	.fnstart)
 	movt r0, #0x0000
 	write_actlr r0
 
-	movw r0, #0x0C00
+	movw r0, #0x0FFF
 	movt r0, #0x0002
 	write_nsacr r0
 
