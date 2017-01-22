@@ -45,10 +45,25 @@
 TAILQ_HEAD(tee_ta_session_head, tee_ta_session);
 TAILQ_HEAD(tee_ta_ctx_head, tee_ta_ctx);
 
+struct mobj;
+
+struct param_val {
+	uint32_t a;
+	uint32_t b;
+};
+
+struct param_mem {
+	struct mobj *mobj;
+	size_t size;
+	size_t offs;
+};
+
 struct tee_ta_param {
 	uint32_t types;
-	TEE_Param params[TEE_NUM_PARAMS];
-	uint32_t param_attr[TEE_NUM_PARAMS];
+	union {
+		struct param_val val;
+		struct param_mem mem;
+	} u[TEE_NUM_PARAMS];
 };
 
 struct tee_ta_ctx;
@@ -145,11 +160,5 @@ struct tee_ta_session *tee_ta_get_session(uint32_t id, bool exclusive,
 void tee_ta_put_session(struct tee_ta_session *sess);
 
 void tee_ta_dump_current(void);
-
-/*
- * Implemented under core/arch for architecure specific checks
- */
-TEE_Result tee_ta_verify_param(struct tee_ta_session *sess,
-			       struct tee_ta_param *param);
 
 #endif

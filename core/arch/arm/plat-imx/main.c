@@ -27,10 +27,13 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
+#include <arm32.h>
 #include <console.h>
+#include <drivers/gic.h>
 #include <drivers/imx_uart.h>
 #include <io.h>
 #include <kernel/generic_boot.h>
+#include <kernel/misc.h>
 #include <kernel/panic.h>
 #include <kernel/pm_stubs.h>
 #include <mm/core_mmu.h>
@@ -38,21 +41,20 @@
 #include <platform_config.h>
 #include <stdint.h>
 #include <sm/optee_smc.h>
-#include <tee/entry_std.h>
 #include <tee/entry_fast.h>
+#include <tee/entry_std.h>
 
 #if defined(PLATFORM_FLAVOR_mx6qsabrelite) || \
 	defined(PLATFORM_FLAVOR_mx6qsabresd)
-#include <drivers/gic.h>
 #include <kernel/tz_ssvce_pl310.h>
 #endif
 
 static void main_fiq(void);
-static void platform_tee_entry_fast(struct thread_smc_args *args);
+static struct gic_data gic_data;
 
 static const struct thread_handlers handlers = {
 	.std_smc = tee_entry_std,
-	.fast_smc = platform_tee_entry_fast,
+	.fast_smc = tee_entry_fast,
 	.fiq = main_fiq,
 	.cpu_on = pm_panic,
 	.cpu_off = pm_panic,
@@ -62,12 +64,11 @@ static const struct thread_handlers handlers = {
 	.system_reset = pm_panic,
 };
 
-#if defined(PLATFORM_FLAVOR_mx6qsabrelite) || \
-	defined(PLATFORM_FLAVOR_mx6qsabresd)
-static struct gic_data gic_data;
-
 register_phys_mem(MEM_AREA_IO_NSEC, CONSOLE_UART_BASE, CORE_MMU_DEVICE_SIZE);
 register_phys_mem(MEM_AREA_IO_SEC, GIC_BASE, CORE_MMU_DEVICE_SIZE);
+
+#if defined(PLATFORM_FLAVOR_mx6qsabrelite) || \
+	defined(PLATFORM_FLAVOR_mx6qsabresd)
 register_phys_mem(MEM_AREA_IO_SEC, PL310_BASE, CORE_MMU_DEVICE_SIZE);
 register_phys_mem(MEM_AREA_IO_SEC, SRC_BASE, CORE_MMU_DEVICE_SIZE);
 #endif
@@ -82,13 +83,56 @@ static void main_fiq(void)
 	panic();
 }
 
+#if defined(PLATFORM_FLAVOR_mx6qsabrelite) || \
+	defined(PLATFORM_FLAVOR_mx6qsabresd)
+void plat_cpu_reset_late(void)
+{
+	uintptr_t addr;
+
+	if (!get_core_pos()) {
+		/* primary core */
+#if defined(CFG_BOOT_SYNC_CPU)
+		/* set secondary entry address and release core */
+		write32(CFG_TEE_LOAD_ADDR, SRC_BASE + SRC_GPR1 + 8);
+		write32(CFG_TEE_LOAD_ADDR, SRC_BASE + SRC_GPR1 + 16);
+		write32(CFG_TEE_LOAD_ADDR, SRC_BASE + SRC_GPR1 + 24);
+
+		write32(SRC_SCR_CPU_ENABLE_ALL, SRC_BASE + SRC_SCR);
+#endif
+
+		/* SCU config */
+		write32(SCU_INV_CTRL_INIT, SCU_BASE + SCU_INV_SEC);
+		write32(SCU_SAC_CTRL_INIT, SCU_BASE + SCU_SAC);
+		write32(SCU_NSAC_CTRL_INIT, SCU_BASE + SCU_NSAC);
+
+		/* SCU enable */
+		write32(read32(SCU_BASE + SCU_CTRL) | 0x1,
+			SCU_BASE + SCU_CTRL);
+
+		/* configure imx6 CSU */
+
+		/* first grant all peripherals */
+		for (addr = CSU_BASE + CSU_CSL_START;
+			 addr != CSU_BASE + CSU_CSL_END;
+			 addr += 4)
+			write32(CSU_ACCESS_ALL, addr);
+
+		/* lock the settings */
+		for (addr = CSU_BASE + CSU_CSL_START;
+			 addr != CSU_BASE + CSU_CSL_END;
+			 addr += 4)
+			write32(read32(addr) | CSU_SETTING_LOCK, addr);
+	}
+}
+#endif
+
 static vaddr_t console_base(void)
 {
 	static void *va;
 
 	if (cpu_mmu_enabled()) {
 		if (!va)
-			va = phys_to_virt(CONSOLE_UART_PA_BASE,
+			va = phys_to_virt(CONSOLE_UART_BASE,
 					  MEM_AREA_IO_NSEC);
 		return (vaddr_t)va;
 	}
@@ -119,65 +163,6 @@ void console_flush(void)
 	imx_uart_flush_tx_fifo(base);
 }
 
-#if defined(PLATFORM_FLAVOR_mx6qsabrelite) || \
-	defined(PLATFORM_FLAVOR_mx6qsabresd)
-#ifdef CFG_BOOT_SECONDARY_REQUEST
-static vaddr_t src_base(void)
-{
-	static void *va __data; /* in case it's used before .bss is cleared */
-
-	if (cpu_mmu_enabled()) {
-		if (!va)
-			va = phys_to_virt(SRC_BASE, MEM_AREA_IO_SEC);
-		return (vaddr_t)va;
-	}
-	return SRC_BASE;
-}
-
-static int platform_smp_boot(size_t core_idx, uint32_t entry)
-{
-	uint32_t val;
-	vaddr_t va = src_base();
-
-	if ((core_idx == 0) || (core_idx >= CFG_TEE_CORE_NB_CORE))
-		return OPTEE_SMC_RETURN_EBADCMD;
-
-	/* set secondary cores' NS entry addresses */
-
-	ns_entry_addrs[core_idx] = entry;
-	cache_maintenance_l1(DCACHE_AREA_CLEAN,
-		&ns_entry_addrs[core_idx],
-		sizeof(uint32_t));
-	cache_maintenance_l2(L2CACHE_AREA_CLEAN,
-		(paddr_t)&ns_entry_addrs[core_idx],
-		sizeof(uint32_t));
-
-	/* boot secondary cores from OP-TEE load address */
-
-	write32((uint32_t)CFG_TEE_LOAD_ADDR, va + SRC_GPR1 + core_idx * 8);
-
-	/* release secondary core */
-
-	val = read32(va + SRC_SCR);
-	val |=  BIT32(SRC_SCR_CORE1_ENABLE_OFFSET + (core_idx - 1));
-	val |=  BIT32(SRC_SCR_CORE1_RST_OFFSET + (core_idx - 1));
-	write32(val, va + SRC_SCR);
-	return OPTEE_SMC_RETURN_OK;
-}
-#endif /* CFG_BOOT_SECONDARY_REQUEST */
-
-vaddr_t pl310_base(void)
-{
-	static void *va __data; /* in case it's used before .bss is cleared */
-
-	if (cpu_mmu_enabled()) {
-		if (!va)
-			va = phys_to_virt(PL310_BASE, MEM_AREA_IO_SEC);
-		return (vaddr_t)va;
-	}
-	return PL310_BASE;
-}
-
 void main_init_gic(void)
 {
 	vaddr_t gicc_base;
@@ -193,18 +178,25 @@ void main_init_gic(void)
 
 	/* Initialize GIC */
 	gic_init(&gic_data, gicc_base, gicd_base);
-
 	itr_init(&gic_data.chip);
 }
-#endif
 
-static void platform_tee_entry_fast(struct thread_smc_args *args)
+#if defined(PLATFORM_FLAVOR_mx6qsabrelite) || \
+	defined(PLATFORM_FLAVOR_mx6qsabresd)
+vaddr_t pl310_base(void)
 {
-#ifdef CFG_BOOT_SECONDARY_REQUEST
-	if (args->a0 == OPTEE_SMC_BOOT_SECONDARY) {
-		args->a0 = platform_smp_boot(args->a1, (uint32_t)(args->a3));
-		return;
+	static void *va __early_bss;
+
+	if (cpu_mmu_enabled()) {
+		if (!va)
+			va = phys_to_virt(PL310_BASE, MEM_AREA_IO_SEC);
+		return (vaddr_t)va;
 	}
-#endif /* CFG_BOOT_SECONDARY_REQUEST */
-	tee_entry_fast(args);
+	return PL310_BASE;
 }
+
+void main_secondary_init_gic(void)
+{
+	gic_cpu_init(&gic_data);
+}
+#endif

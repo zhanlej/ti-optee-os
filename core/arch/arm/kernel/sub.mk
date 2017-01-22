@@ -1,4 +1,3 @@
-srcs-y += tee_ta_manager.c
 srcs-$(CFG_WITH_USER_TA) += user_ta.c
 srcs-y += static_ta.c
 srcs-y += elf_load.c
@@ -8,8 +7,10 @@ srcs-$(CFG_SECURE_TIME_SOURCE_CNTPCT) += tee_time_arm_cntpct.c
 srcs-$(CFG_SECURE_TIME_SOURCE_REE) += tee_time_ree.c
 
 srcs-$(CFG_ARM32_core) += proc_a32.S
+srcs-$(CFG_ARM32_core) += spin_lock_a32.S
 srcs-$(CFG_ARM64_core) += proc_a64.S
 srcs-$(CFG_ARM64_core) += spin_lock_a64.S
+srcs-$(CFG_TEE_CORE_DEBUG) += spin_lock_debug.c
 srcs-$(CFG_ARM32_core) += ssvce_a32.S
 srcs-$(CFG_ARM64_core) += ssvce_a64.S
 srcs-$(CFG_ARM64_core) += cache_helpers_a64.S

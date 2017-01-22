@@ -36,7 +36,7 @@ register_phys_mem(MEM_AREA_IO_NSEC,
 
 static vaddr_t console_base(void)
 {
-	static void *va;
+	static void *va __early_bss;
 
 	if (cpu_mmu_enabled()) {
 		if (!va)

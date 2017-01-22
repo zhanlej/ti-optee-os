@@ -28,6 +28,7 @@
 #ifndef CORE_MMU_H
 #define CORE_MMU_H
 
+#include <compiler.h>
 #include <kernel/user_ta.h>
 #include <mm/tee_mmu_types.h>
 #include <types_ext.h>
@@ -198,6 +199,13 @@ enum core_mmu_fault {
 enum core_mmu_fault core_mmu_get_fault_type(uint32_t fault_descr);
 
 /*
+ * core_mm_type_to_attr() - convert memory type to attribute
+ * @t: memory type
+ * @returns an attribute that can be passed to core_mm_set_entry() and friends
+ */
+uint32_t core_mmu_type_to_attr(enum teecore_memtypes t);
+
+/*
  * core_mmu_create_user_map() - Create user space mapping
  * @utc:	Pointer to user TA context
  * @map:	MMU configuration to use when activating this VA space
@@ -243,8 +251,19 @@ struct core_mmu_table_info {
 bool core_mmu_find_table(vaddr_t va, unsigned max_level,
 		struct core_mmu_table_info *tbl_info);
 
+/*
+ * core_mmu_divide_block() - divide larger block/section into smaller ones
+ * @tbl_info:	table where target record located
+ * @idx:	index of record
+ * @return true if function was able to divide block, false on error
+ */
+bool core_mmu_divide_block(struct core_mmu_table_info *tbl_info,
+			   unsigned int idx);
+
 void core_mmu_set_entry_primitive(void *table, size_t level, size_t idx,
 				  paddr_t pa, uint32_t attr);
+
+void core_mmu_get_user_pgdir(struct core_mmu_table_info *pgd_info);
 
 /*
  * core_mmu_set_entry() - Set entry in translation table
