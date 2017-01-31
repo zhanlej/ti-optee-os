@@ -25,28 +25,41 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include <string.h>
-#include <tee/uuid.h>
-#include <util.h>
+#ifndef __PTA_GPROF_H
+#define __PTA_GPROF_H
 
-void tee_uuid_to_octets(uint8_t *d, const TEE_UUID *s)
-{
-	d[0] = s->timeLow >> 24;
-	d[1] = s->timeLow >> 16;
-	d[2] = s->timeLow >> 8;
-	d[3] = s->timeLow;
-	d[4] = s->timeMid >> 8;
-	d[5] = s->timeMid;
-	d[6] = s->timeHiAndVersion >> 8;
-	d[7] = s->timeHiAndVersion;
-	memcpy(d + 8, s->clockSeqAndNode, sizeof(s->clockSeqAndNode));
-}
+/*
+ * Interface to the gprof pseudo-TA, which is used by libutee to control TA
+ * profiling and forward data to tee-supplicant.
+ */
 
-void tee_uuid_from_octets(TEE_UUID *d, const uint8_t *s)
-{
-	d->timeLow = SHIFT_U32(s[0], 24) | SHIFT_U32(s[1], 16) |
-		     SHIFT_U32(s[2], 8) | s[3];
-	d->timeMid = SHIFT_U32(s[4], 8) | s[5];
-	d->timeHiAndVersion = SHIFT_U32(s[6], 8) | s[7];
-	memcpy(d->clockSeqAndNode, s + 8, sizeof(d->clockSeqAndNode));
-}
+#define PTA_GPROF_UUID { 0x2f6e0d48, 0xc574, 0x426d, { \
+			 0x82, 0x4e, 0x40, 0x19, 0x8c, 0xde, 0x5c, 0xac } }
+
+/*
+ * Send TA profiling data (gmon.out format) to tee-supplicant
+ * Data may be sent in several chunks: first set id to 0, then re-use the
+ * allocated value in subsequent calls.
+ *
+ * [in/out] value[0].a: id
+ * [in]     memref[1]: profiling data
+ */
+#define PTA_GPROF_SEND			0
+
+/*
+ * Start PC sampling of a user TA session
+ *
+ * [in/out] memref[0]: sampling buffer
+ * [in]     value[1].a: offset: the lowest PC value in the TA
+ * [in]     value[1].b: scale: histogram scaling factor
+ */
+#define PTA_GPROF_START_PC_SAMPLING	1
+
+/*
+ * Stop PC sampling of a user TA session and retrieve data
+ *
+ * [out] value[0].a: sampling frequency
+ */
+#define PTA_GPROF_STOP_PC_SAMPLING	2
+
+#endif /* __PTA_GPROF_H */

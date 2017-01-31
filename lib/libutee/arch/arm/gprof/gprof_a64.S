@@ -25,28 +25,53 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include <string.h>
-#include <tee/uuid.h>
-#include <util.h>
+#include <asm.S>
 
-void tee_uuid_to_octets(uint8_t *d, const TEE_UUID *s)
-{
-	d[0] = s->timeLow >> 24;
-	d[1] = s->timeLow >> 16;
-	d[2] = s->timeLow >> 8;
-	d[3] = s->timeLow;
-	d[4] = s->timeMid >> 8;
-	d[5] = s->timeMid;
-	d[6] = s->timeHiAndVersion >> 8;
-	d[7] = s->timeHiAndVersion;
-	memcpy(d + 8, s->clockSeqAndNode, sizeof(s->clockSeqAndNode));
-}
+#ifdef CFG_TA_GPROF_SUPPORT
 
-void tee_uuid_from_octets(TEE_UUID *d, const uint8_t *s)
-{
-	d->timeLow = SHIFT_U32(s[0], 24) | SHIFT_U32(s[1], 16) |
-		     SHIFT_U32(s[2], 8) | s[3];
-	d->timeMid = SHIFT_U32(s[4], 8) | s[5];
-	d->timeHiAndVersion = SHIFT_U32(s[6], 8) | s[7];
-	memcpy(d->clockSeqAndNode, s + 8, sizeof(d->clockSeqAndNode));
-}
+
+/*
+ * Convert return address to call site address by subtracting the size of one
+ * instruction.
+ */
+.macro adjust_pc rd, rn
+	sub	\rd, \rn, #4
+.endm
+
+/*
+ * void __utee_mcount(void *return_address)
+ * @return_address: return address to instrumented function
+ *
+ * With the -pg option, the compiler inserts a call to _mcount into
+ * every function prologue.
+ * x0 contains the value of lr (x30) before the call, that is the return
+ * address to the caller of the instrumented function. The callee, i.e. the
+ * instrumented function itself, is determined from the current value of x30.
+ * Then we call:
+ *   void __mcount_internal(void *frompc, void *selfpc);
+ *
+ * _mcount is defined and set to the value of this function by the linker
+ * script if the TA is instrumented, i.e., if _mcount is referenced
+ */
+FUNC __utee_mcount, :
+	stp		x29, x30, [sp, #-16]!
+	mov		x29, sp
+	adjust_pc	x0, x0
+	adjust_pc	x1, x30
+	bl		__mcount_internal
+	ldp		x29, x30, [sp], #16
+	ret
+END_FUNC __utee_mcount
+
+#else /* !CFG_TA_GPROF_SUPPORT */
+
+/*
+ * The TA linker script always references __utee_mcount so provide a version
+ * that does nothing
+ */
+	.weak __utee_mcount
+FUNC __utee_mcount, :
+	ret
+END_FUNC __utee_mcount
+
+#endif /* CFG_TA_GPROF_SUPPORT */

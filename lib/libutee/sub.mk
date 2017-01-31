@@ -15,3 +15,5 @@ srcs-y += tee_api_panic.c
 
 subdirs-y += tui
 subdirs-y += arch/$(ARCH)
+
+cflags-lib-$(CFG_ULIBS_GPROF) += -pg
