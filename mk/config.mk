@@ -130,6 +130,16 @@ CFG_RPMB_FS ?= n
 # tee-supplicant process will open /dev/mmcblk<id>rpmb
 CFG_RPMB_FS_DEV_ID ?= 0
 
+# Enables RPMB key programming by the TEE, in case the RPMB partition has not
+# been configured yet.
+# !!! Security warning !!!
+# Do *NOT* enable this in product builds, as doing so would allow the TEE to
+# leak the RPMB key.
+# This option is useful in the following situations:
+# - Testing
+# - RPMB key provisioning in a controlled environment (factory setup)
+CFG_RPMB_WRITE_KEY ?= n
+
 # SQL FS stores its data in a SQLite database, accessed by normal world
 CFG_SQL_FS ?= n
 
@@ -199,3 +209,20 @@ CFG_BOOT_SECONDARY_REQUEST ?= n
 
 # Default heap size for Core, 64 kB
 CFG_CORE_HEAP_SIZE ?= 65536
+
+# TA profiling.
+# When this option is enabled, OP-TEE can execute Trusted Applications
+# instrumented with GCC's -pg flag and will output profiling information
+# in gmon.out format to /tmp/gmon-<ta_uuid>.out (path is defined in
+# tee-supplicant)
+CFG_TA_GPROF_SUPPORT ?= n
+
+# Enable to compile user TA libraries with profiling (-pg).
+# Depends on CFG_TA_GPROF_SUPPORT.
+CFG_ULIBS_GPROF ?= n
+
+ifeq ($(CFG_ULIBS_GPROF),y)
+ifneq ($(CFG_TA_GPROF_SUPPORT),y)
+$(error Cannot instrument user libraries if user mode profiling is disabled)
+endif
+endif

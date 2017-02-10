@@ -30,10 +30,6 @@ entries-unpaged += sm_init
 entries-unpaged += core_init_mmu_regs
 entries-unpaged += sem_cpu_sync
 entries-unpaged += generic_boot_get_handlers
-# Can't use KEEP_PAGER in mobj.c since it for some reason causes an assert
-# in the AArch64 linker
-entries-unpaged += mobj_phys_get_pa
-entries-unpaged += mobj_mm_get_pa
 
 ldargs-all_objs := -i $(objs) $(link-ldadd) $(libgcccore)
 cleanfiles += $(link-out-dir)/all_objs.o
@@ -217,11 +213,12 @@ $(link-out-dir)/tee.bin: $(link-out-dir)/tee-pager.bin \
 			 $(link-out-dir)/tee-init_mem_usage.txt \
 			./scripts/gen_hashed_bin.py
 	@$(cmd-echo-silent) '  GEN     $@'
-	$(q)./scripts/gen_hashed_bin.py \
+	$(q)load_addr=`cat $(link-out-dir)/tee-init_load_addr.txt` && \
+	./scripts/gen_hashed_bin.py \
 		--arch $(if $(filter y,$(CFG_ARM64_core)),arm64,arm32) \
 		--init_size `cat $(link-out-dir)/tee-init_size.txt` \
-		--init_load_addr_lo \
-			`cat $(link-out-dir)/tee-init_load_addr.txt` \
+		--init_load_addr_hi $$(($$load_addr >> 32 & 0xffffffff)) \
+		--init_load_addr_lo $$(($$load_addr & 0xffffffff)) \
 		--init_mem_usage `cat $(link-out-dir)/tee-init_mem_usage.txt` \
 		--tee_pager_bin $(link-out-dir)/tee-pager.bin \
 		--tee_pageable_bin $(link-out-dir)/tee-pageable.bin \

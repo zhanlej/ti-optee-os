@@ -25,28 +25,17 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include <string.h>
-#include <tee/uuid.h>
-#include <util.h>
+#ifndef __GPROF_PTA_H
+#define __GPROF_PTA_H
 
-void tee_uuid_to_octets(uint8_t *d, const TEE_UUID *s)
-{
-	d[0] = s->timeLow >> 24;
-	d[1] = s->timeLow >> 16;
-	d[2] = s->timeLow >> 8;
-	d[3] = s->timeLow;
-	d[4] = s->timeMid >> 8;
-	d[5] = s->timeMid;
-	d[6] = s->timeHiAndVersion >> 8;
-	d[7] = s->timeHiAndVersion;
-	memcpy(d + 8, s->clockSeqAndNode, sizeof(s->clockSeqAndNode));
-}
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+#include <tee_api_types.h>
 
-void tee_uuid_from_octets(TEE_UUID *d, const uint8_t *s)
-{
-	d->timeLow = SHIFT_U32(s[0], 24) | SHIFT_U32(s[1], 16) |
-		     SHIFT_U32(s[2], 8) | s[3];
-	d->timeMid = SHIFT_U32(s[4], 8) | s[5];
-	d->timeHiAndVersion = SHIFT_U32(s[6], 8) | s[7];
-	memcpy(d->clockSeqAndNode, s + 8, sizeof(d->clockSeqAndNode));
-}
+TEE_Result __pta_gprof_send(void *buf, size_t len, uint32_t *id);
+TEE_Result __pta_gprof_pc_sampling_start(void *buf, size_t len, size_t offset,
+					 size_t scale);
+TEE_Result __pta_gprof_pc_sampling_stop(uint32_t *rate);
+void __pta_gprof_fini(void);
+#endif /* __GPROF_PTA_H */
