@@ -1,6 +1,8 @@
 /*
- * Copyright (c) 2016, Linaro Limited
+ * Copyright (C) 2016 Freescale Semiconductor, Inc.
  * All rights reserved.
+ *
+ * Peng Fan <peng.fan@nxp.com>
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are met:
@@ -25,43 +27,51 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include <console.h>
-#include <drivers/serial8250_uart.h>
-#include <mm/core_memprot.h>
-#include <platform_config.h>
+#include <stdint.h>
+#include <sm/optee_smc.h>
+#include <sm/psci.h>
+#include <sm/sm.h>
+#include <sm/std_smc.h>
+#include <tee/uuid.h>
+#include <trace.h>
 
-register_phys_mem(MEM_AREA_IO_NSEC,
-		  CONSOLE_UART_BASE,
-		  SERIAL8250_UART_REG_SIZE);
+static const TEE_UUID uuid = {
+	0x5f8b97df, 0x2d0d, 0x4ad2,
+	{0x98, 0xd2, 0x74, 0xf4, 0x38, 0x27, 0x98, 0xbb},
+};
 
-static vaddr_t console_base(void)
+void smc_std_handler(struct thread_smc_args *args)
 {
-	static void *va __early_bss;
+	uint32_t smc_fid = args->a0;
 
-	if (cpu_mmu_enabled()) {
-		if (!va)
-			va = phys_to_virt(CONSOLE_UART_BASE, MEM_AREA_IO_NSEC);
-		return (vaddr_t)va;
+	if (is_psci_fid(smc_fid)) {
+		tee_psci_handler(args);
+		return;
 	}
-	return CONSOLE_UART_BASE;
-}
 
-void console_init(void)
-{
-	serial8250_uart_init(console_base(), CONSOLE_UART_CLK_IN_HZ,
-			     CONSOLE_BAUDRATE);
-}
-
-void console_putc(int ch)
-{
-	vaddr_t base = console_base();
-
-	if (ch == '\n')
-		serial8250_uart_putc('\r', base);
-	serial8250_uart_putc(ch, base);
-}
-
-void console_flush(void)
-{
-	serial8250_uart_flush_tx_fifo(console_base());
+	switch (smc_fid) {
+	case ARM_STD_SVC_CALL_COUNT:
+		/* PSCI is the only STD service implemented */
+		args->a0 = PSCI_NUM_CALLS;
+		break;
+	case ARM_STD_SVC_UID:
+		args->a0 = uuid.timeLow;
+		args->a1 = (uuid.timeHiAndVersion << 16) | uuid.timeMid;
+		args->a2 = (uuid.clockSeqAndNode[3] << 24) |
+			(uuid.clockSeqAndNode[2] << 16) |
+			(uuid.clockSeqAndNode[1] << 8) |
+			uuid.clockSeqAndNode[0];
+		args->a3 = (uuid.clockSeqAndNode[7] << 24) |
+			(uuid.clockSeqAndNode[6] << 16) |
+			(uuid.clockSeqAndNode[5] << 8) |
+			uuid.clockSeqAndNode[4];
+		break;
+	case ARM_STD_SVC_VERSION:
+		args->a0 = STD_SVC_VERSION_MAJOR;
+		args->a1 = STD_SVC_VERSION_MINOR;
+		break;
+	default:
+		args->a0 = OPTEE_SMC_RETURN_UNKNOWN_FUNCTION;
+		break;
+	}
 }

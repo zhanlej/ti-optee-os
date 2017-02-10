@@ -30,6 +30,10 @@ entries-unpaged += sm_init
 entries-unpaged += core_init_mmu_regs
 entries-unpaged += sem_cpu_sync
 entries-unpaged += generic_boot_get_handlers
+# Can't use KEEP_PAGER in mobj.c since it for some reason causes an assert
+# in the AArch64 linker
+entries-unpaged += mobj_phys_get_pa
+entries-unpaged += mobj_mm_get_pa
 
 ldargs-all_objs := -i $(objs) $(link-ldadd) $(libgcccore)
 cleanfiles += $(link-out-dir)/all_objs.o
@@ -56,12 +60,12 @@ $(link-out-dir)/unpaged.o: $(link-out-dir)/unpaged_entries.txt
 		`cat $(link-out-dir)/unpaged_entries.txt` \
 		$(ldargs-unpaged-objs) -o $@
 
-cleanfiles += $(link-out-dir)/text_unpaged.ld.S:
+cleanfiles += $(link-out-dir)/text_unpaged.ld.S
 $(link-out-dir)/text_unpaged.ld.S: $(link-out-dir)/unpaged.o
 	@$(cmd-echo-silent) '  GEN     $@'
 	$(q)$(READELFcore) -a -W $< | ${AWK} -f ./scripts/gen_ld_text_sects.awk > $@
 
-cleanfiles += $(link-out-dir)/rodata_unpaged.ld.S:
+cleanfiles += $(link-out-dir)/rodata_unpaged.ld.S
 $(link-out-dir)/rodata_unpaged.ld.S: $(link-out-dir)/unpaged.o
 	@$(cmd-echo-silent) '  GEN     $@'
 	$(q)$(READELFcore) -a -W $< | \
@@ -93,12 +97,12 @@ $(link-out-dir)/init.o: $(link-out-dir)/init_entries.txt
 		`cat $(link-out-dir)/init_entries.txt` \
 		$(ldargs-init-objs) -o $@
 
-cleanfiles += $(link-out-dir)/text_init.ld.S:
+cleanfiles += $(link-out-dir)/text_init.ld.S
 $(link-out-dir)/text_init.ld.S: $(link-out-dir)/init.o
 	@$(cmd-echo-silent) '  GEN     $@'
 	$(q)$(READELFcore) -a -W $< | ${AWK} -f ./scripts/gen_ld_text_sects.awk > $@
 
-cleanfiles += $(link-out-dir)/rodata_init.ld.S:
+cleanfiles += $(link-out-dir)/rodata_init.ld.S
 $(link-out-dir)/rodata_init.ld.S: $(link-out-dir)/init.o
 	@$(cmd-echo-silent) '  GEN     $@'
 	$(q)$(READELFcore) -a -W $< | \

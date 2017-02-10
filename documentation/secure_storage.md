@@ -52,7 +52,7 @@ When a TA is calling the write function provided by GP Trusted Storage API to
 write data to a persistent object, a corresponding syscall implemented in TEE
 Trusted Storage Service will be called, which in turn will invoke a series of
 TEE file operations to store the data. TEE file system will then encrypt the
-data (when CFG_ENC_FS=y) and send REE file operation commands and the encrypted
+data and send REE file operation commands and the encrypted
 data to TEE supplicant by a series of RPC messages. TEE supplicant will receive
 the messages and store the encrypted data accordingly to the Linux file
 system. Reading files are handled in a similar manner.
@@ -150,7 +150,7 @@ per-device keys for different subsystems using the same algorithm as we
 generate the SSK; An easy way to generate different per-device keys for
 different subsystems is using different static strings to generate the keys.
 
-### Trusted Application Storage Key (TKS)
+### Trusted Application Storage Key (TSK)
 
 The TSK is a per-Trusted Application key, which is generated from the SSK and
 the TA's identifier (UUID). It is used to protect the FEK, in other words,
@@ -158,6 +158,17 @@ to encrypt/decrypt the FEK.
 
 TSK is derived by:
 > TSK = HMAC<sub>SHA256</sub> (SSK, TA_UUID)
+
+#### TA storage space isolation
+
+OP-TEE provides different folders for different TAs in Linux file system for
+storing their own TEE files, but OP-TEE cannot prevent an attacker from
+directly copying a TEE file from one TA's folder to another TA's folder in
+Linux file system.
+
+The TSK offers an effective protection against this kind of attack. If an
+attacker copies an TEE file from one TA's folder to another TA's folder,
+this TA would not be able to obtain the plaintext of the TEE file.
 
 ### File Encryption Key (FEK)
 
@@ -203,19 +214,35 @@ following operations should support atomic update:
 The strategy used in OP-TEE secure storage to guarantee the atomicity is
 out-of-place update.
 
+## Important caveats
+
+Currently **no OP-TEE platform is able to support retrieval of the Hardware
+Unique Key or Chip ID required for secure operation**.
+
+For all platforms, a constant key is used, resulting in no protection against
+decryption, or Secure Storage duplication to other devices.
+
+This is because information about how to retrieve key data from the SoC is
+considered sensitive by the vendors and it is not freely available.
+
+In OP-TEE, there are apis for reading the keys generically from "One-Time
+Programmable" memory, or OTP.  But there are no existing platform implementations.
+
+To allow Secure Storage to operate securely on your platform, you must:
+
+ - enable CFG_OTP_SUPPORT on your platform
+
+ - In your platform code, define implementations for:
+
+```
+ void tee_otp_get_hw_unique_key(struct tee_hw_unique_key *hwkey);
+ int tee_otp_get_die_id(uint8_t *buffer, size_t len);
+```
+
+These implementations should fetch the key data from your SoC-specific e-fuses,
+or crypto unit according to the method defined by your SoC vendor.
+
 ## Future Work
-
-- **TA storage space isolation**
-
-OP-TEE provides different folders for different TAs in Linux file system for
-storing their own TEE files, but OP-TEE cannot prevent an attacker from
-directly copying a TEE file from one TA's folder to another TA's folder in
-Linux file system. TEE OS should have the ability to detect those kind of
-attack, but for now OP-TEE secure storage doesn't meet the requirement.
-
-A simple solution to detect the attack is using TA's UUID as AAD
-when calculating the tag of meta file, so that OP-TEE will know if a TEE file
-belongs to a specific TA when the TA tries to open the TEE file.
 
 - **TEE file renaming attack detection**
 

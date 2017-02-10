@@ -64,7 +64,6 @@
 #include <kernel/panic.h>
 #include <kernel/misc.h>
 #include <mm/core_memprot.h>
-#include <mm/tee_mmu_defs.h>
 #include <mm/pgt_cache.h>
 #include <mm/core_memprot.h>
 #include <string.h>
@@ -125,6 +124,8 @@
 #define ATTR_IWBWA_OWBWA_NTR		(0xff)
 
 #define MAIR_ATTR_SET(attr, index)	(((uint64_t)attr) << ((index) << 3))
+
+#define OUTPUT_ADDRESS_MASK	(0x0000FFFFFFFFF000ULL)
 
 /* (internal) physical address size bits in EL3/EL1 */
 #define TCR_PS_BITS_4GB		(0x0)
@@ -375,8 +376,9 @@ static struct tee_mmap_region *init_xlation_table(struct tee_mmap_region *mm,
 			desc = INVALID_DESC;
 			debug_print("%*s%010" PRIx64 " %8x",
 					level * 2, "", base_va, level_size);
-		} else if (mm->va <= base_va && mm->va + mm->size >=
-				base_va + level_size) {
+		} else if (mm->va <= base_va &&
+			   mm->va + mm->size >= base_va + level_size &&
+			   !(mm->pa & (level_size - 1))) {
 			/* Next region covers all of area */
 			int attr = mmap_region_attr(mm, base_va, level_size);
 
@@ -644,6 +646,52 @@ bool core_mmu_find_table(vaddr_t va, unsigned max_level,
 		level++;
 		num_entries = XLAT_TABLE_ENTRIES;
 	}
+}
+
+bool core_mmu_divide_block(struct core_mmu_table_info *tbl_info,
+			   unsigned int idx)
+{
+	uint64_t *new_table;
+	uint64_t *entry;
+	uint64_t new_table_desc;
+	size_t new_entry_size;
+	paddr_t paddr;
+	uint32_t attr;
+	int i;
+
+	if (tbl_info->level >= 3)
+		return false;
+
+	if (next_xlat >= MAX_XLAT_TABLES)
+		return false;
+
+	if (tbl_info->level == 1 && idx >= NUM_L1_ENTRIES)
+		return false;
+
+	if (tbl_info->level > 1 && idx >= XLAT_TABLE_ENTRIES)
+		return false;
+
+	entry = (uint64_t *)tbl_info->table + idx;
+	assert((*entry & DESC_ENTRY_TYPE_MASK) == BLOCK_DESC);
+
+	new_table = xlat_tables[next_xlat++];
+	new_table_desc = TABLE_DESC | (uint64_t)(uintptr_t)new_table;
+
+	/* store attributes of original block */
+	attr = desc_to_mattr(tbl_info->level, *entry);
+	paddr = *entry & OUTPUT_ADDRESS_MASK;
+	new_entry_size = 1 << (tbl_info->shift - XLAT_TABLE_ENTRIES_SHIFT);
+
+	/* Fill new xlat table with entries pointing to the same memory */
+	for (i = 0; i < XLAT_TABLE_ENTRIES; i++) {
+		*new_table = paddr | mattr_to_desc(tbl_info->level + 1, attr);
+		paddr += new_entry_size;
+		new_table++;
+	}
+
+	/* Update descriptor at current level */
+	*entry = new_table_desc;
+	return true;
 }
 
 void core_mmu_set_entry_primitive(void *table, size_t level, size_t idx,

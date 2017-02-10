@@ -33,7 +33,6 @@
 #include <mm/core_memprot.h>
 #include <mm/core_mmu.h>
 #include <mm/pgt_cache.h>
-#include <mm/tee_mmu_defs.h>
 #include <platform_config.h>
 #include <stdlib.h>
 #include <string.h>
@@ -139,6 +138,31 @@
 #define ATTR_IWBWA_OWBWA_PRRR		PRRR_IDX(ATTR_IWBWA_OWBWA_INDEX, 2, 1)
 #define ATTR_IWBWA_OWBWA_NMRR		NMRR_IDX(ATTR_IWBWA_OWBWA_INDEX, 1, 1)
 
+#define NUM_L1_ENTRIES		4096
+#define NUM_L2_ENTRIES		256
+
+#define L1_TBL_SIZE		(NUM_L1_ENTRIES * 4)
+#define L2_TBL_SIZE		(NUM_L2_ENTRIES * 4)
+#define L1_ALIGNMENT		L1_TBL_SIZE
+#define L2_ALIGNMENT		L2_TBL_SIZE
+
+/* Defined to the smallest possible secondary L1 MMU table */
+#define TTBCR_N_VALUE		7
+
+/* Number of sections in ttbr0 when user mapping activated */
+#define NUM_UL1_ENTRIES         (1 << (12 - TTBCR_N_VALUE))
+#define UL1_ALIGNMENT		(NUM_UL1_ENTRIES * 4)
+/* TTB attributes */
+
+/* TTB0 of TTBR0 (depends on TTBCR_N_VALUE) */
+#define TTB_UL1_MASK		(~(UL1_ALIGNMENT - 1))
+/* TTB1 of TTBR1 */
+#define TTB_L1_MASK		(~(L1_ALIGNMENT - 1))
+
+#ifndef MAX_XLAT_TABLES
+#define MAX_XLAT_TABLES		4
+#endif
+
 enum desc_type {
 	DESC_TYPE_PAGE_TABLE,
 	DESC_TYPE_SECTION,
@@ -149,14 +173,16 @@ enum desc_type {
 };
 
 /* Main MMU L1 table for teecore */
-static uint32_t main_mmu_l1_ttb[TEE_MMU_L1_NUM_ENTRIES]
-		__aligned(TEE_MMU_L1_ALIGNMENT) __section(".nozi.mmu.l1");
-static uint32_t main_mmu_l2_ttb[TEE_MMU_L2_NUM_ENTRIES]
-		__aligned(TEE_MMU_L2_ALIGNMENT) __section(".nozi.mmu.l2");
+static uint32_t main_mmu_l1_ttb[NUM_L1_ENTRIES]
+		__aligned(L1_ALIGNMENT) __section(".nozi.mmu.l1");
+
+/* L2 MMU tables */
+static uint32_t main_mmu_l2_ttb[MAX_XLAT_TABLES][NUM_L2_ENTRIES]
+		__aligned(L2_ALIGNMENT) __section(".nozi.mmu.l2");
 
 /* MMU L1 table for TAs, one for each thread */
-static uint32_t main_mmu_ul1_ttb[CFG_NUM_THREADS][TEE_MMU_UL1_NUM_ENTRIES]
-		__aligned(TEE_MMU_UL1_ALIGNMENT) __section(".nozi.mmu.ul1");
+static uint32_t main_mmu_ul1_ttb[CFG_NUM_THREADS][NUM_UL1_ENTRIES]
+		__aligned(UL1_ALIGNMENT) __section(".nozi.mmu.ul1");
 
 static vaddr_t core_mmu_get_main_ttb_va(void)
 {
@@ -167,7 +193,7 @@ static paddr_t core_mmu_get_main_ttb_pa(void)
 {
 	paddr_t pa = virt_to_phys((void *)core_mmu_get_main_ttb_va());
 
-	if (pa & ~TEE_MMU_TTB_L1_MASK)
+	if (pa & ~TTB_L1_MASK)
 		panic("invalid core l1 table");
 	return pa;
 }
@@ -181,25 +207,23 @@ static paddr_t core_mmu_get_ul1_ttb_pa(void)
 {
 	paddr_t pa = virt_to_phys((void *)core_mmu_get_ul1_ttb_va());
 
-	if (pa & ~TEE_MMU_TTB_UL1_MASK)
+	if (pa & ~TTB_UL1_MASK)
 		panic("invalid user l1 table");
 	return pa;
 }
 
-static void *core_mmu_alloc_l2(struct tee_mmap_region *mm)
+static void *core_mmu_alloc_l2(size_t size)
 {
 	/* Can't have this in .bss since it's not initialized yet */
-	static size_t l2_offs __attribute__((section(".data")));
-	const size_t l2_va_size = TEE_MMU_L2_NUM_ENTRIES * SMALL_PAGE_SIZE;
-	size_t l2_va_space = ((sizeof(main_mmu_l2_ttb) - l2_offs) /
-			     TEE_MMU_L2_SIZE) * l2_va_size;
+	static uint32_t tables_used __early_bss;
+	uint32_t to_alloc = ROUNDUP(size, NUM_L2_ENTRIES * SMALL_PAGE_SIZE) /
+		(NUM_L2_ENTRIES * SMALL_PAGE_SIZE);
 
-	if (l2_offs)
+	if (tables_used + to_alloc > MAX_XLAT_TABLES)
 		return NULL;
-	if (mm->size > l2_va_space)
-		return NULL;
-	l2_offs += ROUNDUP(mm->size, l2_va_size) / l2_va_size;
-	return main_mmu_l2_ttb;
+
+	tables_used += to_alloc;
+	return main_mmu_l2_ttb[tables_used - to_alloc];
 }
 
 static enum desc_type get_desc_type(unsigned level, uint32_t desc)
@@ -397,10 +421,10 @@ void core_mmu_set_info_table(struct core_mmu_table_info *tbl_info,
 	assert(level <= 2);
 	if (level == 1) {
 		tbl_info->shift = SECTION_SHIFT;
-		tbl_info->num_entries = TEE_MMU_L1_NUM_ENTRIES;
+		tbl_info->num_entries = NUM_L1_ENTRIES;
 	} else {
 		tbl_info->shift = SMALL_PAGE_SHIFT;
-		tbl_info->num_entries = TEE_MMU_L2_NUM_ENTRIES;
+		tbl_info->num_entries = NUM_L2_ENTRIES;
 	}
 }
 
@@ -409,7 +433,7 @@ void core_mmu_get_user_pgdir(struct core_mmu_table_info *pgd_info)
 	void *tbl = (void *)core_mmu_get_ul1_ttb_va();
 
 	core_mmu_set_info_table(pgd_info, 1, 0, tbl);
-	pgd_info->num_entries = TEE_MMU_UL1_NUM_ENTRIES;
+	pgd_info->num_entries = NUM_UL1_ENTRIES;
 }
 
 void core_mmu_create_user_map(struct user_ta_ctx *utc,
@@ -417,8 +441,7 @@ void core_mmu_create_user_map(struct user_ta_ctx *utc,
 {
 	struct core_mmu_table_info dir_info;
 
-	COMPILE_TIME_ASSERT(sizeof(uint32_t) * TEE_MMU_L2_NUM_ENTRIES ==
-			    PGT_SIZE);
+	COMPILE_TIME_ASSERT(L2_TBL_SIZE == PGT_SIZE);
 
 	core_mmu_get_user_pgdir(&dir_info);
 	memset(dir_info.table, 0, dir_info.num_entries * sizeof(uint32_t));
@@ -444,6 +467,49 @@ bool core_mmu_find_table(vaddr_t va, unsigned max_level,
 
 		core_mmu_set_info_table(tbl_info, 2, n << SECTION_SHIFT, l2tbl);
 	}
+	return true;
+}
+
+bool core_mmu_divide_block(struct core_mmu_table_info *tbl_info,
+			   unsigned int idx)
+{
+	uint32_t *new_table;
+	uint32_t *entry;
+	uint32_t new_table_desc;
+	paddr_t paddr;
+	uint32_t attr;
+	int i;
+
+	if (tbl_info->level != 1)
+		return false;
+
+	if (idx >= NUM_L1_ENTRIES)
+		return false;
+
+	new_table = core_mmu_alloc_l2(NUM_L2_ENTRIES * SMALL_PAGE_SIZE);
+	if (!new_table)
+		return false;
+
+	entry = (uint32_t *)tbl_info->table + idx;
+	assert(get_desc_type(1, *entry) == DESC_TYPE_SECTION);
+
+	new_table_desc = SECTION_PT_PT | (uint32_t)new_table;
+	if (*entry & SECTION_NOTSECURE)
+		new_table_desc |= SECTION_PT_NOTSECURE;
+
+	/* store attributes of original block */
+	attr = desc_to_mattr(1, *entry);
+	paddr = *entry & ~SECTION_MASK;
+
+	/* Fill new xlat table with entries pointing to the same memory */
+	for (i = 0; i < NUM_L2_ENTRIES; i++) {
+		*new_table = paddr | mattr_to_desc(tbl_info->level + 1, attr);
+		paddr += SMALL_PAGE_SIZE;
+		new_table++;
+	}
+
+	/* Update descriptor at current level */
+	*entry = new_table_desc;
 	return true;
 }
 
@@ -504,7 +570,7 @@ void core_mmu_get_user_va_range(vaddr_t *base, size_t *size)
 	}
 
 	if (size)
-		*size = (TEE_MMU_UL1_NUM_ENTRIES - 1) << SECTION_SHIFT;
+		*size = (NUM_UL1_ENTRIES - 1) << SECTION_SHIFT;
 }
 
 void core_mmu_get_user_map(struct core_mmu_user_map *map)
@@ -546,7 +612,7 @@ bool core_mmu_user_mapping_is_active(void)
 
 static paddr_t map_page_memarea(struct tee_mmap_region *mm)
 {
-	uint32_t *l2 = core_mmu_alloc_l2(mm);
+	uint32_t *l2 = core_mmu_alloc_l2(mm->size);
 	size_t pg_idx;
 	uint32_t attr;
 
@@ -605,7 +671,7 @@ static void map_memarea(struct tee_mmap_region *mm, uint32_t *ttb)
 	 * TODO: support mapping devices at a virtual address which isn't
 	 * the same as the physical address.
 	 */
-	if (mm->va < (TEE_MMU_UL1_NUM_ENTRIES * SECTION_SIZE))
+	if (mm->va < (NUM_UL1_ENTRIES * SECTION_SIZE))
 		panic("va conflicts with user ta address");
 
 	if ((mm->va | mm->pa | mm->size) & SECTION_MASK) {
@@ -635,7 +701,7 @@ static void map_memarea(struct tee_mmap_region *mm, uint32_t *ttb)
 		if (region_size == SECTION_SIZE)
 			pa += SECTION_SIZE;
 		else
-			pa += TEE_MMU_L2_SIZE;
+			pa += L2_TBL_SIZE;
 	}
 }
 
@@ -645,7 +711,7 @@ void core_init_mmu_tables(struct tee_mmap_region *mm)
 	size_t n;
 
 	/* reset L1 table */
-	memset(ttb1, 0, TEE_MMU_L1_SIZE);
+	memset(ttb1, 0, L1_TBL_SIZE);
 
 	for (n = 0; mm[n].size; n++)
 		map_memarea(mm + n, ttb1);
@@ -686,7 +752,7 @@ void core_init_mmu_regs(void)
 	 * Enable lookups using TTBR0 and TTBR1 with the split of addresses
 	 * defined by TEE_MMU_TTBCR_N_VALUE.
 	 */
-	write_ttbcr(TEE_MMU_TTBCR_N_VALUE);
+	write_ttbcr(TTBCR_N_VALUE);
 
 	write_ttbr0(ttb_pa | TEE_MMU_DEFAULT_ATTRS);
 	write_ttbr1(ttb_pa | TEE_MMU_DEFAULT_ATTRS);

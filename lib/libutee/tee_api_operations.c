@@ -875,6 +875,12 @@ static TEE_Result tee_buffer_update(
 	size_t buffer_size;
 	size_t buffer_left;
 
+	if (!src) {
+		if (slen)
+			TEE_Panic(0);
+		goto out;
+	}
+
 	if (op->buffer_two_blocks) {
 		buffer_size = op->block_size * 2;
 		buffer_left = 1;
@@ -924,7 +930,7 @@ static TEE_Result tee_buffer_update(
 
 	if (slen >= (buffer_size + buffer_left)) {
 		/* Buffer is empty, feed as much as possible from src */
-		l = ROUNDUP(slen - buffer_size + 1, op->block_size);
+		l = ROUNDUP(slen - buffer_size, op->block_size);
 
 		tmp_dlen = dlen;
 		res = update_func(op->state, src, l, dst, &tmp_dlen);
@@ -977,6 +983,7 @@ TEE_Result TEE_CipherUpdate(TEE_OperationHandle operation, void *srcData,
 	}
 
 	if (!srcData && !srcLen) {
+		*destLen = 0;
 		res = TEE_SUCCESS;
 		goto out;
 	}
@@ -1062,11 +1069,6 @@ TEE_Result TEE_CipherDoFinal(TEE_OperationHandle operation,
 			res = TEE_ERROR_BAD_PARAMETERS;
 			goto out;
 		}
-	}
-
-	if (!srcData && !srcLen) {
-		res = TEE_SUCCESS;
-		goto out;
 	}
 
 	/*
@@ -1355,6 +1357,7 @@ TEE_Result TEE_AEUpdate(TEE_OperationHandle operation, void *srcData,
 	}
 
 	if (!srcData && !srcLen) {
+		*destLen = 0;
 		res = TEE_SUCCESS;
 		goto out;
 	}
@@ -1415,11 +1418,6 @@ TEE_Result TEE_AEEncryptFinal(TEE_OperationHandle operation,
 
 	if ((operation->info.handleState & TEE_HANDLE_FLAG_INITIALIZED) == 0) {
 		res = TEE_ERROR_BAD_PARAMETERS;
-		goto out;
-	}
-
-	if (!srcData && !srcLen) {
-		res = TEE_SUCCESS;
 		goto out;
 	}
 
@@ -1505,11 +1503,6 @@ TEE_Result TEE_AEDecryptFinal(TEE_OperationHandle operation,
 
 	if ((operation->info.handleState & TEE_HANDLE_FLAG_INITIALIZED) == 0) {
 		res = TEE_ERROR_BAD_PARAMETERS;
-		goto out;
-	}
-
-	if (!srcData && !srcLen) {
-		res = TEE_SUCCESS;
 		goto out;
 	}
 

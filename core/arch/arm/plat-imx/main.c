@@ -29,6 +29,7 @@
 
 #include <arm32.h>
 #include <console.h>
+#include <drivers/gic.h>
 #include <drivers/imx_uart.h>
 #include <io.h>
 #include <kernel/generic_boot.h>
@@ -45,11 +46,11 @@
 
 #if defined(PLATFORM_FLAVOR_mx6qsabrelite) || \
 	defined(PLATFORM_FLAVOR_mx6qsabresd)
-#include <drivers/gic.h>
 #include <kernel/tz_ssvce_pl310.h>
 #endif
 
 static void main_fiq(void);
+static struct gic_data gic_data;
 
 static const struct thread_handlers handlers = {
 	.std_smc = tee_entry_std,
@@ -63,13 +64,13 @@ static const struct thread_handlers handlers = {
 	.system_reset = pm_panic,
 };
 
-#if defined(PLATFORM_FLAVOR_mx6qsabrelite) || \
-	defined(PLATFORM_FLAVOR_mx6qsabresd)
-static struct gic_data gic_data;
-
 register_phys_mem(MEM_AREA_IO_NSEC, CONSOLE_UART_BASE, CORE_MMU_DEVICE_SIZE);
 register_phys_mem(MEM_AREA_IO_SEC, GIC_BASE, CORE_MMU_DEVICE_SIZE);
+
+#if defined(PLATFORM_FLAVOR_mx6qsabrelite) || \
+	defined(PLATFORM_FLAVOR_mx6qsabresd)
 register_phys_mem(MEM_AREA_IO_SEC, PL310_BASE, CORE_MMU_DEVICE_SIZE);
+register_phys_mem(MEM_AREA_IO_SEC, SRC_BASE, CORE_MMU_DEVICE_SIZE);
 #endif
 
 const struct thread_handlers *generic_boot_get_handlers(void)
@@ -90,7 +91,7 @@ void plat_cpu_reset_late(void)
 
 	if (!get_core_pos()) {
 		/* primary core */
-#if defined(CFG_BOOT_SECONDARY_REQUEST)
+#if defined(CFG_BOOT_SYNC_CPU)
 		/* set secondary entry address and release core */
 		write32(CFG_TEE_LOAD_ADDR, SRC_BASE + SRC_GPR1 + 8);
 		write32(CFG_TEE_LOAD_ADDR, SRC_BASE + SRC_GPR1 + 16);
@@ -131,7 +132,7 @@ static vaddr_t console_base(void)
 
 	if (cpu_mmu_enabled()) {
 		if (!va)
-			va = phys_to_virt(CONSOLE_UART_PA_BASE,
+			va = phys_to_virt(CONSOLE_UART_BASE,
 					  MEM_AREA_IO_NSEC);
 		return (vaddr_t)va;
 	}
@@ -162,20 +163,6 @@ void console_flush(void)
 	imx_uart_flush_tx_fifo(base);
 }
 
-#if defined(PLATFORM_FLAVOR_mx6qsabrelite) || \
-	defined(PLATFORM_FLAVOR_mx6qsabresd)
-vaddr_t pl310_base(void)
-{
-	static void *va __early_bss;
-
-	if (cpu_mmu_enabled()) {
-		if (!va)
-			va = phys_to_virt(PL310_BASE, MEM_AREA_IO_SEC);
-		return (vaddr_t)va;
-	}
-	return PL310_BASE;
-}
-
 void main_init_gic(void)
 {
 	vaddr_t gicc_base;
@@ -192,6 +179,20 @@ void main_init_gic(void)
 	/* Initialize GIC */
 	gic_init(&gic_data, gicc_base, gicd_base);
 	itr_init(&gic_data.chip);
+}
+
+#if defined(PLATFORM_FLAVOR_mx6qsabrelite) || \
+	defined(PLATFORM_FLAVOR_mx6qsabresd)
+vaddr_t pl310_base(void)
+{
+	static void *va __early_bss;
+
+	if (cpu_mmu_enabled()) {
+		if (!va)
+			va = phys_to_virt(PL310_BASE, MEM_AREA_IO_SEC);
+		return (vaddr_t)va;
+	}
+	return PL310_BASE;
 }
 
 void main_secondary_init_gic(void)

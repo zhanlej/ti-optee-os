@@ -1,6 +1,8 @@
 /*
- * Copyright (c) 2016, Linaro Limited
+ * Copyright (C) 2016 Freescale Semiconductor, Inc.
  * All rights reserved.
+ *
+ * Peng Fan <peng.fan@nxp.com>
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are met:
@@ -25,43 +27,31 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include <console.h>
-#include <drivers/serial8250_uart.h>
-#include <mm/core_memprot.h>
+#include <arm32.h>
+#include <io.h>
+#include <kernel/generic_boot.h>
 #include <platform_config.h>
+#include <stdint.h>
 
-register_phys_mem(MEM_AREA_IO_NSEC,
-		  CONSOLE_UART_BASE,
-		  SERIAL8250_UART_REG_SIZE);
-
-static vaddr_t console_base(void)
+static void init_csu(void)
 {
-	static void *va __early_bss;
+	uintptr_t addr;
 
-	if (cpu_mmu_enabled()) {
-		if (!va)
-			va = phys_to_virt(CONSOLE_UART_BASE, MEM_AREA_IO_NSEC);
-		return (vaddr_t)va;
-	}
-	return CONSOLE_UART_BASE;
+	/* first grant all peripherals */
+	for (addr = CSU_BASE + CSU_CSL_START;
+	     addr != CSU_BASE + CSU_CSL_END;
+	     addr += 4)
+		write32(CSU_ACCESS_ALL, addr);
+
+	/* lock the settings */
+	for (addr = CSU_BASE + CSU_CSL_START;
+	     addr != CSU_BASE + CSU_CSL_END;
+	     addr += 4)
+		write32(read32(addr) | CSU_SETTING_LOCK, addr);
 }
 
-void console_init(void)
+/* MMU not enabled now */
+void plat_cpu_reset_late(void)
 {
-	serial8250_uart_init(console_base(), CONSOLE_UART_CLK_IN_HZ,
-			     CONSOLE_BAUDRATE);
-}
-
-void console_putc(int ch)
-{
-	vaddr_t base = console_base();
-
-	if (ch == '\n')
-		serial8250_uart_putc('\r', base);
-	serial8250_uart_putc(ch, base);
-}
-
-void console_flush(void)
-{
-	serial8250_uart_flush_tx_fifo(console_base());
+	init_csu();
 }

@@ -101,19 +101,14 @@
 #define CFG_TA_RAM_SIZE		ROUNDDOWN((TZDRAM_SIZE - CFG_TEE_RAM_VA_SIZE), \
 						CORE_MMU_DEVICE_SIZE)
 
-#define DEVICE0_PA_BASE		ROUNDDOWN(UART0_BASE, \
-						CORE_MMU_DEVICE_SIZE)
-#define DEVICE0_VA_BASE		(64 * 1024 * 1024)
-#define DEVICE0_SIZE		CORE_MMU_DEVICE_SIZE
-#define DEVICE0_TYPE		MEM_AREA_IO_NSEC
+#define CONSOLE_UART_BASE		(UART0_BASE)
 
-/*
- * console uart virtual address
- * The physical address is 0x2020000, we mapped it to 0x4020000,
- * see DEVICE0_VA_BASE and DEVICE0_PA_BASE
- */
-#define CONSOLE_UART_BASE		(0x4020000)
-#define CONSOLE_UART_PA_BASE		(UART0_BASE)
+/* Central Security Unit register values */
+#define CSU_BASE			0x021C0000
+#define CSU_CSL_START			0x0
+#define CSU_CSL_END			0xA0
+#define CSU_ACCESS_ALL			0x00FF00FF
+#define CSU_SETTING_LOCK		0x01000100
 
 /* For i.MX6 Quad SABRE Lite and Smart Device board */
 
@@ -126,6 +121,8 @@
 #define SRC_SCR				0x000
 #define SRC_GPR1			0x020
 #define SRC_SCR_CPU_ENABLE_ALL		SHIFT_U32(0x7, 22)
+#define SRC_SCR_CORE1_RST_OFFSET	14
+#define SRC_SCR_CORE1_ENABLE_OFFSET	22
 #define GIC_BASE			0x00A00000
 #define GICC_OFFSET			0x100
 #define GICD_OFFSET			0x1000
@@ -145,16 +142,12 @@
 
 #if defined(PLATFORM_FLAVOR_mx6qsabrelite)
 #define CONSOLE_UART_BASE		UART2_BASE
-#define CONSOLE_UART_PA_BASE		UART2_BASE
 #endif
 #if defined(PLATFORM_FLAVOR_mx6qsabresd)
 #define CONSOLE_UART_BASE		UART1_BASE
-#define CONSOLE_UART_PA_BASE		UART1_BASE
 #endif
 #define DRAM0_BASE			0x10000000
 #define DRAM0_SIZE			0x40000000
-
-#define HEAP_SIZE			(24 * 1024)
 
 #define CFG_TEE_RAM_VA_SIZE		(1024 * 1024)
 

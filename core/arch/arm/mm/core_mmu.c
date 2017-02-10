@@ -44,8 +44,8 @@
 #include <kernel/tz_ssvce_pl310.h>
 #include <mm/core_memprot.h>
 #include <mm/core_mmu.h>
+#include <mm/mobj.h>
 #include <mm/pgt_cache.h>
-#include <mm/tee_mmu_defs.h>
 #include <mm/tee_mmu.h>
 #include <mm/tee_pager.h>
 #include <platform_config.h>
@@ -126,8 +126,6 @@ register_phys_mem(DEVICE5_TYPE, DEVICE5_PA_BASE, DEVICE5_SIZE);
 register_phys_mem(DEVICE6_TYPE, DEVICE6_PA_BASE, DEVICE6_SIZE);
 #endif
 
-register_phys_mem(MEM_AREA_RES_VASPACE, 0, RES_VASPACE_SIZE);
-
 static bool _pbuf_intersects(struct memaccess_area *a, size_t alen,
 			     paddr_t pa, size_t size)
 {
@@ -153,16 +151,6 @@ static bool _pbuf_is_inside(struct memaccess_area *a, size_t alen,
 }
 #define pbuf_is_inside(a, pa, size) \
 	_pbuf_is_inside((a), ARRAY_SIZE(a), (pa), (size))
-
-static bool pbuf_is_multipurpose(paddr_t paddr, size_t size)
-{
-	if (pbuf_intersects(secure_only, paddr, size))
-		return false;
-	if (pbuf_intersects(nsec_shared, paddr, size))
-		return false;
-
-	return pbuf_is_inside(ddr, paddr, size);
-}
 
 static bool pa_is_in_map(struct tee_mmap_region *map, paddr_t pa)
 {
@@ -284,12 +272,38 @@ static void add_phys_mem(struct tee_mmap_region *memory_map, size_t num_elems,
 	memmove(memory_map + n + 1, memory_map + n,
 		sizeof(struct tee_mmap_region) * (*last - n));
 	(*last)++;
+	memset(memory_map + n, 0, sizeof(memory_map[0]));
 	memory_map[n].type = mem->type;
 	memory_map[n].pa = mem->addr;
 	memory_map[n].size = mem->size;
 }
 
-static uint32_t type_to_attr(enum teecore_memtypes t)
+static void add_va_space(struct tee_mmap_region *memory_map, size_t num_elems,
+			 unsigned int type, size_t size, size_t *last) {
+	size_t n = 0;
+
+	DMSG("type %d size 0x%08zx", type, size);
+	while (true) {
+		if (n >= (num_elems - 1)) {
+			EMSG("Out of entries (%zu) in memory_map", num_elems);
+			panic();
+		}
+		if (n == *last)
+			break;
+		if (type < memory_map[n].type)
+			break;
+		n++;
+	}
+
+	memmove(memory_map + n + 1, memory_map + n,
+		sizeof(struct tee_mmap_region) * (*last - n));
+	(*last)++;
+	memset(memory_map + n, 0, sizeof(memory_map[0]));
+	memory_map[n].type = type;
+	memory_map[n].size = size;
+}
+
+uint32_t core_mmu_type_to_attr(enum teecore_memtypes t)
 {
 	const uint32_t attr = TEE_MATTR_VALID_BLOCK | TEE_MATTR_PRW |
 			      TEE_MATTR_GLOBAL;
@@ -338,31 +352,47 @@ static void init_mem_map(struct tee_mmap_region *memory_map, size_t num_elems)
 		}
 		add_phys_mem(memory_map, num_elems, &m, &last);
 	}
+
+	add_va_space(memory_map, num_elems, MEM_AREA_RES_VASPACE,
+		     RES_VASPACE_SIZE, &last);
+
 	memory_map[last].type = MEM_AREA_NOTYPE;
+
+	/*
+	 * Assign region sizes, note that MEM_AREA_TEE_RAM always uses
+	 * SMALL_PAGE_SIZE if paging is enabled.
+	 */
+	for (map = memory_map; map->type != MEM_AREA_NOTYPE; map++) {
+		paddr_t mask = map->pa | map->size;
+
+		if (!(mask & CORE_MMU_PGDIR_MASK))
+			map->region_size = CORE_MMU_PGDIR_SIZE;
+		else if (!(mask & SMALL_PAGE_MASK))
+			map->region_size = SMALL_PAGE_SIZE;
+		else
+			panic("Impossible memory alignment");
+	}
 
 	/*
 	 * bootcfg_memory_map is sorted in order first by type and last by
 	 * address. This puts TEE_RAM first and TA_RAM second
 	 *
 	 */
-
 	map = memory_map;
 	assert(map->type == MEM_AREA_TEE_RAM);
 	map->va = map->pa;
 #ifdef CFG_WITH_PAGER
 	map->region_size = SMALL_PAGE_SIZE,
-#else
-	map->region_size = CORE_MMU_PGDIR_SIZE,
 #endif
-	map->attr = type_to_attr(map->type);
+	map->attr = core_mmu_type_to_attr(map->type);
+
 
 	if (core_mmu_place_tee_ram_at_top(map->pa)) {
 		va = map->va;
 		map++;
 		while (map->type != MEM_AREA_NOTYPE) {
-			map->attr = type_to_attr(map->type);
-			map->region_size = CORE_MMU_PGDIR_SIZE,
-			va = ROUNDDOWN(va - map->size, CORE_MMU_PGDIR_SIZE);
+			map->attr = core_mmu_type_to_attr(map->type);
+			va -= map->size;
 			map->va = va;
 			map++;
 		}
@@ -382,10 +412,9 @@ static void init_mem_map(struct tee_mmap_region *memory_map, size_t num_elems)
 		va = ROUNDUP(map->va + map->size, CORE_MMU_PGDIR_SIZE);
 		map++;
 		while (map->type != MEM_AREA_NOTYPE) {
-			map->attr = type_to_attr(map->type);
-			map->region_size = CORE_MMU_PGDIR_SIZE,
+			map->attr = core_mmu_type_to_attr(map->type);
 			map->va = va;
-			va = ROUNDUP(va + map->size, CORE_MMU_PGDIR_SIZE);
+			va += map->size;
 			map++;
 		}
 	}
@@ -512,8 +541,6 @@ bool core_pbuf_is(uint32_t attr, paddr_t pbuf, size_t len)
 		return pbuf_inside_map_area(pbuf, len, map_ta_ram);
 	case CORE_MEM_NSEC_SHM:
 		return pbuf_inside_map_area(pbuf, len, map_nsec_shm);
-	case CORE_MEM_MULTPURPOSE:
-		return pbuf_is_multipurpose(pbuf, len);
 	case CORE_MEM_EXTRAM:
 		return pbuf_is_inside(ddr, pbuf, len);
 	case CORE_MEM_CACHED:
@@ -742,10 +769,14 @@ static void set_region(struct core_mmu_table_info *tbl_info,
 
 #ifdef CFG_SMALL_PAGE_USER_TA
 static void set_pg_region(struct core_mmu_table_info *dir_info,
-			struct tee_mmap_region *region, struct pgt **pgt,
+			struct tee_ta_region *region, struct pgt **pgt,
 			struct core_mmu_table_info *pg_info)
 {
-	struct tee_mmap_region r = *region;
+	struct tee_mmap_region r = {
+		.va = region->va,
+		.size = region->size,
+		.attr = region->attr,
+	};
 	vaddr_t end = r.va + r.size;
 	uint32_t pgt_attr = (r.attr & TEE_MATTR_SECURE) | TEE_MATTR_TABLE;
 
@@ -777,10 +808,16 @@ static void set_pg_region(struct core_mmu_table_info *dir_info,
 
 		r.size = MIN(CORE_MMU_PGDIR_SIZE - (r.va - pg_info->va_base),
 			     end - r.va);
-		if (!(r.attr & TEE_MATTR_PAGED))
+		if (!mobj_is_paged(region->mobj)) {
+			size_t granule = BIT(pg_info->shift);
+			size_t offset = r.va - region->va + region->offset;
+
+			if (mobj_get_pa(region->mobj, offset, granule,
+					&r.pa) != TEE_SUCCESS)
+				panic("Failed to get PA of unpaged mobj");
 			set_region(pg_info, &r);
+		}
 		r.va += r.size;
-		r.pa += r.size;
 	}
 }
 
@@ -792,14 +829,11 @@ void core_mmu_populate_user_map(struct core_mmu_table_info *dir_info,
 	struct pgt *pgt;
 	size_t n;
 
-	if (!utc->mmu->size)
-		return;	/* Nothing to map */
-
 	/* Find the last valid entry */
-	n = utc->mmu->size;
+	n = ARRAY_SIZE(utc->mmu->regions);
 	while (true) {
 		n--;
-		if (utc->mmu->table[n].size)
+		if (utc->mmu->regions[n].size)
 			break;
 		if (!n)
 			return;	/* Nothing to map */
@@ -808,16 +842,20 @@ void core_mmu_populate_user_map(struct core_mmu_table_info *dir_info,
 	/*
 	 * Allocate all page tables in advance.
 	 */
-	pgt_alloc(pgt_cache, &utc->ctx, utc->mmu->table[0].va,
-		  utc->mmu->table[n].va + utc->mmu->table[n].size - 1);
+	pgt_alloc(pgt_cache, &utc->ctx, utc->mmu->regions[0].va,
+		  utc->mmu->regions[n].va + utc->mmu->regions[n].size - 1);
 	pgt = SLIST_FIRST(pgt_cache);
 
 	core_mmu_set_info_table(&pg_info, dir_info->level + 1, 0, NULL);
 
-	for (n = 0; n < utc->mmu->size; n++) {
-		if (!utc->mmu->table[n].size)
+	for (n = 0; n < ARRAY_SIZE(utc->mmu->regions); n++)
+		mobj_update_mapping(utc->mmu->regions[n].mobj, utc,
+				    utc->mmu->regions[n].va);
+
+	for (n = 0; n < ARRAY_SIZE(utc->mmu->regions); n++) {
+		if (!utc->mmu->regions[n].size)
 			continue;
-		set_pg_region(dir_info, utc->mmu->table + n, &pgt, &pg_info);
+		set_pg_region(dir_info, utc->mmu->regions + n, &pgt, &pg_info);
 	}
 }
 
@@ -826,11 +864,25 @@ void core_mmu_populate_user_map(struct core_mmu_table_info *dir_info,
 				struct user_ta_ctx *utc)
 {
 	unsigned n;
+	struct tee_mmap_region r;
+	size_t offset;
+	size_t granule = BIT(dir_info->shift);
 
-	for (n = 0; n < utc->mmu->size; n++) {
-		if (!utc->mmu->table[n].size)
+	memset(&r, 0, sizeof(r));
+	for (n = 0; n < ARRAY_SIZE(utc->mmu->regions); n++) {
+		if (!utc->mmu->regions[n].size)
 			continue;
-		set_region(dir_info, utc->mmu->table + n);
+
+		offset = utc->mmu->regions[n].offset;
+		r.va = utc->mmu->regions[n].va;
+		r.size = utc->mmu->regions[n].size;
+		r.attr = utc->mmu->regions[n].attr;
+
+		if (mobj_get_pa(utc->mmu->regions[n].mobj, offset, granule,
+				&r.pa) != TEE_SUCCESS)
+			panic("Failed to get PA of unpaged mobj");
+
+		set_region(dir_info, &r);
 	}
 }
 #endif
@@ -893,7 +945,7 @@ bool core_mmu_add_mapping(enum teecore_memtypes type, paddr_t addr, size_t len)
 	}
 	map->type = type;
 	map->region_size = granule;
-	map->attr = type_to_attr(type);
+	map->attr = core_mmu_type_to_attr(type);
 	map->pa = p;
 
 	set_region(&tbl_info, map);
