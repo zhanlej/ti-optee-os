@@ -27,7 +27,7 @@
 
 #include <arm.h>
 #include <kernel/misc.h>
-#include <kernel/static_ta.h>
+#include <kernel/pseudo_ta.h>
 #include <kernel/user_ta.h>
 #include <kernel/thread.h>
 #include <mm/core_memprot.h>
@@ -180,15 +180,6 @@ static TEE_Result gprof_stop_pc_sampling(struct tee_ta_session *s,
  * Trusted Application Entry Points
  */
 
-static TEE_Result create_ta(void)
-{
-	return TEE_SUCCESS;
-}
-
-static void destroy_ta(void)
-{
-}
-
 static TEE_Result open_session(uint32_t param_types __unused,
 			       TEE_Param params[TEE_NUM_PARAMS] __unused,
 			       void **sess_ctx __unused)
@@ -199,14 +190,10 @@ static TEE_Result open_session(uint32_t param_types __unused,
 	s = tee_ta_get_calling_session();
 	if (!s)
 		return TEE_ERROR_ACCESS_DENIED;
-	if (is_static_ta_ctx(s->ctx))
+	if (is_pseudo_ta_ctx(s->ctx))
 		return TEE_ERROR_ACCESS_DENIED;
 
 	return TEE_SUCCESS;
-}
-
-static void close_session(void *sess_ctx __unused)
-{
 }
 
 static TEE_Result invoke_command(void *sess_ctx __unused, uint32_t cmd_id,
@@ -228,9 +215,7 @@ static TEE_Result invoke_command(void *sess_ctx __unused, uint32_t cmd_id,
 	return TEE_ERROR_NOT_IMPLEMENTED;
 }
 
-static_ta_register(.uuid = PTA_GPROF_UUID, .name = "gprof",
-		   .create_entry_point = create_ta,
-		   .destroy_entry_point = destroy_ta,
+pseudo_ta_register(.uuid = PTA_GPROF_UUID, .name = "gprof",
+		   .flags = PTA_DEFAULT_FLAGS,
 		   .open_session_entry_point = open_session,
-		   .close_session_entry_point = close_session,
 		   .invoke_command_entry_point = invoke_command);

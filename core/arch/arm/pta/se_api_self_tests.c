@@ -26,7 +26,7 @@
  */
 
 #include <compiler.h>
-#include <kernel/static_ta.h>
+#include <kernel/pseudo_ta.h>
 #include <tee_api_types.h>
 #include <tee_api_defines.h>
 #include <trace.h>
@@ -76,30 +76,6 @@
 /*
  * Trusted Application Entry Points
  */
-
-static TEE_Result create_ta(void)
-{
-	DMSG("create entry point for static ta \"%s\"", TA_NAME);
-	return TEE_SUCCESS;
-}
-
-static void destroy_ta(void)
-{
-	DMSG("destroy entry point for static ta \"%s\"", TA_NAME);
-}
-
-static TEE_Result open_session(uint32_t nParamTypes __unused,
-		TEE_Param pParams[TEE_NUM_PARAMS] __unused,
-		void **ppSessionContext __unused)
-{
-	DMSG("open entry point for static ta \"%s\"", TA_NAME);
-	return TEE_SUCCESS;
-}
-
-static void close_session(void *pSessionContext __unused)
-{
-	DMSG("close entry point for static ta \"%s\"", TA_NAME);
-}
 
 static TEE_Result test_reader(struct tee_se_reader_proxy **handle)
 {
@@ -469,8 +445,8 @@ static TEE_Result test_transmit(struct tee_se_reader_proxy **proxies)
 	return TEE_SUCCESS;
 }
 
-static TEE_Result se_api_self_tests(uint32_t nParamTypes __attribute__((__unused__)),
-		TEE_Param pParams[TEE_NUM_PARAMS] __attribute__((__unused__)))
+static TEE_Result se_api_self_tests(uint32_t nParamTypes __unused,
+				    TEE_Param pParams[TEE_NUM_PARAMS] __unused)
 {
 	size_t size = MAX_READERS;
 	TEE_Result ret;
@@ -517,9 +493,6 @@ static TEE_Result invoke_command(void *pSessionContext __unused,
 	return TEE_ERROR_BAD_PARAMETERS;
 }
 
-static_ta_register(.uuid = SE_API_SELF_TEST_UUID, .name = TA_NAME,
-		   .create_entry_point = create_ta,
-		   .destroy_entry_point = destroy_ta,
-		   .open_session_entry_point = open_session,
-		   .close_session_entry_point = close_session,
+pseudo_ta_register(.uuid = SE_API_SELF_TEST_UUID, .name = TA_NAME,
+		   .flags = PTA_DEFAULT_FLAGS,
 		   .invoke_command_entry_point = invoke_command);
