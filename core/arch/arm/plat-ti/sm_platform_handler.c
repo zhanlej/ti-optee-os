@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016, Linaro Limited
+ * Copyright (c) 2017, Texas Instruments
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -18,51 +18,40 @@
  * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
  * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
  * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
- * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+ * SUBSTITUTE GOODS OR SERVICES// LOSS OF USE, DATA, OR PROFITS// OR BUSINESS
  * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
  * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
  * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
  * POSSIBILITY OF SUCH DAMAGE.
- *
  */
 
-#ifndef __PL022_SPI_H__
-#define __PL022_SPI_H__
+#include <arm32.h>
+#include <sm/sm.h>
+#include "api_monitor_index.h"
 
-#include <gpio.h>
-#include <spi.h>
+#define API_HAL_RET_VALUE_OK 0x00000000
+#define API_HAL_RET_VALUE_SERVICE_UNKNWON 0xFFFFFFFF
 
-#define PL022_REG_SIZE	0x1000
+bool sm_platform_handler(struct sm_ctx *ctx)
+{
+	if (ctx->nsec.r12 == 0x200)
+		return true;
 
-enum pl022_cs_control {
-	PL022_CS_CTRL_AUTO_GPIO,
-	PL022_CS_CTRL_CB,
-	PL022_CS_CTRL_MANUAL
-};
+	switch (ctx->nsec.r12) {
+	case API_MONITOR_ACTLR_SETREGISTER_INDEX:
+		write_actlr(ctx->nsec.r0);
+		isb();
+		ctx->nsec.r0 = API_HAL_RET_VALUE_OK;
+		break;
+	case API_MONITOR_TIMER_SETCNTFRQ_INDEX:
+		write_cntfrq(ctx->nsec.r0);
+		isb();
+		ctx->nsec.r0 = API_HAL_RET_VALUE_OK;
+		break;
+	default:
+		ctx->nsec.r0 = API_HAL_RET_VALUE_SERVICE_UNKNWON;
+		break;
+	}
 
-struct pl022_cs_gpio_data {
-	struct gpio_chip	*chip;
-	unsigned int		pin_num;
-};
-
-union pl022_cs_data {
-	struct pl022_cs_gpio_data	gpio_data;
-	void				(*cs_cb)(enum gpio_level value);
-};
-
-struct pl022_data {
-	union pl022_cs_data	cs_data;
-	struct spi_chip		chip;
-	vaddr_t			base;
-	enum spi_mode		mode;
-	enum pl022_cs_control	cs_control;
-	unsigned int		clk_hz;
-	unsigned int		speed_hz;
-	unsigned int		data_size_bits;
-	bool			loopback;
-};
-
-void pl022_init(struct pl022_data *pd);
-
-#endif	/* __PL022_SPI_H__ */
-
+	return false;
+}
