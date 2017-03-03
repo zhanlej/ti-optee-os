@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, Linaro Limited
+ * Copyright (c) 2016-2017, Linaro Limited
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -24,52 +24,34 @@
  * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
  * POSSIBILITY OF SUCH DAMAGE.
  */
-#ifndef KERNEL_STATIC_TA_H
-#define KERNEL_STATIC_TA_H
 
-#include <assert.h>
-#include <compiler.h>
-#include <kernel/tee_ta_manager.h>
+#ifndef __TEE_ISOCKET_H
+#define __TEE_ISOCKET_H
+
+#include <stdint.h>
 #include <tee_api_types.h>
-#include <util.h>
+#include <__tee_isocket_defines.h>
 
-struct static_ta_head {
-	TEE_UUID uuid;
-	const char *name;
+typedef void *TEE_iSocketHandle;
 
-	TEE_Result (*create_entry_point)(void);
-	void (*destroy_entry_point)(void);
-	TEE_Result (*open_session_entry_point)(uint32_t nParamTypes,
-			TEE_Param pParams[TEE_NUM_PARAMS],
-			void **ppSessionContext);
-	void (*close_session_entry_point)(void *pSessionContext);
-	TEE_Result (*invoke_command_entry_point)(void *pSessionContext,
-			uint32_t nCommandID, uint32_t nParamTypes,
-			TEE_Param pParams[TEE_NUM_PARAMS]);
-};
+typedef const struct TEE_iSocket_s {
+	uint32_t TEE_iSocketVersion;
+	uint8_t protocolID;
+	TEE_Result (*open)(TEE_iSocketHandle *ctx, void *setup,
+			   uint32_t *protocolError);
 
-#define static_ta_register(...) static const struct static_ta_head __head \
-			__used __section("ta_head_section") = { __VA_ARGS__ }
+	TEE_Result (*close)(TEE_iSocketHandle ctx);
 
+	TEE_Result (*send)(TEE_iSocketHandle ctx, const void *buf,
+			    uint32_t *length, uint32_t timeout);
 
-struct static_ta_ctx {
-	const struct static_ta_head *static_ta;
-	struct tee_ta_ctx ctx;
-};
+	TEE_Result (*recv)(TEE_iSocketHandle ctx, void *buf, uint32_t *length,
+			   uint32_t timeout);
 
-static inline bool is_static_ta_ctx(struct tee_ta_ctx *ctx)
-{
-	return !(ctx->flags & TA_FLAG_USER_MODE);
-}
+	uint32_t (*error)(TEE_iSocketHandle ctx);
 
-static inline struct static_ta_ctx *to_static_ta_ctx(struct tee_ta_ctx *ctx)
-{
-	assert(is_static_ta_ctx(ctx));
-	return container_of(ctx, struct static_ta_ctx, ctx);
-}
+	TEE_Result (*ioctl)(TEE_iSocketHandle ctx, uint32_t commandCode,
+			    void *buf, uint32_t *length);
+} TEE_iSocket;
 
-TEE_Result tee_ta_init_static_ta_session(const TEE_UUID *uuid,
-			struct tee_ta_session *s);
-
-#endif /*KERNEL_STATIC_TA_H*/
-
+#endif /*__TEE_ISOCKET_H*/

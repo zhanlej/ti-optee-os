@@ -27,7 +27,7 @@
 #include <compiler.h>
 #include <stdio.h>
 #include <trace.h>
-#include <kernel/static_ta.h>
+#include <kernel/pseudo_ta.h>
 #include <mm/tee_pager.h>
 #include <mm/tee_mm.h>
 #include <string.h>
@@ -141,26 +141,6 @@ static TEE_Result get_pager_stats(uint32_t type, TEE_Param p[TEE_NUM_PARAMS])
  * Trusted Application Entry Points
  */
 
-static TEE_Result create_ta(void)
-{
-	return TEE_SUCCESS;
-}
-
-static void destroy_ta(void)
-{
-}
-
-static TEE_Result open_session(uint32_t ptype __unused,
-			       TEE_Param params[TEE_NUM_PARAMS] __unused,
-			       void **ppsess __unused)
-{
-	return TEE_SUCCESS;
-}
-
-static void close_session(void *psess __unused)
-{
-}
-
 static TEE_Result invoke_command(void *psess __unused,
 				 uint32_t cmd, uint32_t ptypes,
 				 TEE_Param params[TEE_NUM_PARAMS])
@@ -176,9 +156,6 @@ static TEE_Result invoke_command(void *psess __unused,
 	return TEE_ERROR_BAD_PARAMETERS;
 }
 
-static_ta_register(.uuid = STATS_UUID, .name = TA_NAME,
-		   .create_entry_point = create_ta,
-		   .destroy_entry_point = destroy_ta,
-		   .open_session_entry_point = open_session,
-		   .close_session_entry_point = close_session,
+pseudo_ta_register(.uuid = STATS_UUID, .name = TA_NAME,
+		   .flags = PTA_DEFAULT_FLAGS,
 		   .invoke_command_entry_point = invoke_command);

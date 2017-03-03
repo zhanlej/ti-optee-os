@@ -11,9 +11,10 @@ OP-TEE design
 6.  [Stacks](#6-stacks)
 7.  [Shared Memory](#7-shared-memory)
 8.  [Pager](#8-pager)
-9.  [Cryptographic abstraction layer](#9-cryptographic-abstraction-layer)
-10. [libutee](#10-libutee)
-11. [Trusted Applications](#11-trusted-applications)
+9.  [Memory Objects](#9-memory-objects)
+10. [Cryptographic abstraction layer](#10-cryptographic-abstraction-layer)
+11. [libutee](#11-libutee)
+12. [Trusted Applications](#12-trusted-applications)
 
 # 1. Introduction
 OP-TEE is a so called Trusted Execution Environment, in short a TEE, for ARM
@@ -28,6 +29,13 @@ components.
 OP-TEE was designed with scalability and portability in mind and as of now it
 has been ported to quite a few different platforms, both ARMv7-A and ARMv8-A
 from different vendors. For a full list, please see [Platforms Supported].
+
+OP-TEE OS is made of 2 main components: the OP-TEE core and a collection of
+libraries designed for being used by Trusted Applications. While OP-TEE core
+executes in the ARM CPU privileged level (also referred to as 'kernel land'),
+the Trusted Applications execute in the non-privileged level (also referred to as
+the 'userland'). The static libraries provided by the OP-TEE OS enable Trusted
+Applications to call secure services executing at a more privileged level.
 
 # 2. Platform initialization
 TBD
@@ -56,10 +64,10 @@ registers 1 to 7, register 0 holds the SMC id which among other things tells
 whether it is a standard or a fast call.
 
 # 4. Thread handling
-The Trusted OS uses a couple of threads to be able to support running jobs in
+The OP-TEE core uses a couple of threads to be able to support running jobs in
 parallel (not fully enabled!). There are handlers for different purposes. In
 [thread.c] you will find a function called `thread_init_primary` which assigns
-`init_handlers` (functions) that should be called when Trusted OS receives
+`init_handlers` (functions) that should be called when OP-TEE core receives
 standard or fast calls, FIQ and PSCI calls. There are default handlers for these
 services, but the platform can decide if they want to implement their own
 platform specific handlers instead.
@@ -83,18 +91,18 @@ initialized with `SPINLOCK_UNLOCK`.
 ### Mutex
 A mutex is represented by `struct mutex`. A mutex can be locked and
 unlocked with interrupts enabled or disabled, but only from a normal
-thread. A mutex can't be used in an interrupt handler, abort handler or
+thread. A mutex cannot be used in an interrupt handler, abort handler or
 before a thread has been selected for the CPU. A mutex is initialized with
 either `MUTEX_INITIALIZER` or `mutex_init()`.
 
 | Function | Purpose |
 |----------|---------|
 |`mutex_lock()` | Locks a mutex. If the mutex is unlocked this is a fast operation, else the function issues an RPC to wait in normal world. |
-| `mutex_unlock()` | Unlocks a mutex. If there's no waiters this is a fast operation, else the function issues an RPC to wake up a waiter in normal world. |
+| `mutex_unlock()` | Unlocks a mutex. If there is no waiters this is a fast operation, else the function issues an RPC to wake up a waiter in normal world. |
 | `mutex_trylock()` | Locks a mutex if unlocked and returns `true` else the mutex is unchanged and the function returns `false`. |
-| `mutex_destroy()` | Asserts that the mutex is unlocked and there's no waiters, after this the memory used by the mutex can be freed. |
+| `mutex_destroy()` | Asserts that the mutex is unlocked and there is no waiters, after this the memory used by the mutex can be freed. |
 
-When a mutex is locked it's owned by the thread calling `mutex_lock()` or
+When a mutex is locked it is owned by the thread calling `mutex_lock()` or
 `mutex_trylock()`, the mutex may only be unlocked by the thread owning the
 mutex. A thread should not exit to TA user space when holding a mutex.
 
@@ -115,7 +123,7 @@ destroyed. A condvar is initialized with `CONDVAR_INITIALIZER` or
 
 The caller of `condvar_signal()` or `condvar_broadcast()` should hold the
 mutex associated with the condition variable to guarantee that a waiter
-doesn't miss the signal.
+does not miss the signal.
 
 # 5. MMU
 ## Translation tables
@@ -143,12 +151,13 @@ table when the TA context is activated.
 ![Select xlation table](images/xlat_table.png "Select xlation table")
 
 ## Translation tables and switching to normal world
-When switching to normal world either via an IRQ or RPC there's a chance
-that secure world will resume execution on a different CPU. This means that
-the new CPU need to be configured with the context of the currently active
-TA. This is solved by always setting the TA context in the CPU when
-resuming execution. Here's room for improvements since it's more likely
-than not that it's the same CPU that resumes execution in secure world.
+When switching to normal world either via a foreign interrupt or RPC there
+is a chance that secure world will resume execution on a different CPU.
+This means that the new CPU need to be configured with the context of the
+currently active TA. This is solved by always setting the TA context in
+the CPU when resuming execution. Here is room for improvements since it is
+more likely than not that it is the same CPU that resumes execution in
+secure world.
 
 # 6. Stacks
 Different stacks are used during different stages. The stacks are:
@@ -208,11 +217,16 @@ is restored it will continue at the next instruction as if this function did a
 normal return. CPU switches to use the temp stack before returning to normal
 world.
 
-## IRQ exit
-IRQ exit occurs when OP-TEE receives an IRQ, which is always handled in normal
-world. IRQ exit is similar to RPC exit but it's `thread_irq_handler()` and
-`elx_irq()` (respectively for ARMv7-A/Aarch32 and for Aarch64) that saves the
-thread state instead. The thread is resumed in the same way though.
+## Foreign interrupt exit
+Foreign interrupt exit occurs when OP-TEE receives a foreign interrupt. For ARM
+GICv2 mode, foreign interrupt is sent as IRQ which is always handled in normal
+world. Foreign interrupt exit is similar to RPC exit but it is
+`thread_irq_handler()` and `elx_irq()` (respectively for ARMv7-A/Aarch32 and
+for Aarch64) that saves the thread state instead. The thread is resumed in the
+same way though.
+For ARM GICv3 mode, foreign interrupt is sent as FIQ which could be handled by
+either secure world (EL3 in AArch64) or normal world. This mode is not supported
+yet.
 
 *Notes for ARMv7/AArch32:*
 SP_IRQ is initialized to temp stack instead of a separate stack.  Prior to
@@ -225,7 +239,8 @@ original `SP_EL0` is saved in the thread context to be restored when resuming.
 ## Resume entry
 OP-TEE is entered using the temp stack in the same way as for normal entry. The
 thread to resume is looked up and the state is restored to resume execution. The
-procedure to resume from an RPC exit or an IRQ exit is exactly the same.
+procedure to resume from an RPC exit or an foreign interrupt exit is exactly
+the same.
 
 ## Syscall
 Syscalls are executed using the thread stack.
@@ -240,7 +255,7 @@ thread_svc_regs` in case the TA is executed in AArch64.
 
 Current thread stack is assigned to `SP_EL0` which is then selected.
 
-When returning `SP_EL0` is assigned what's in `struct thread_svc_regs`. This
+When returning `SP_EL0` is assigned what is in `struct thread_svc_regs`. This
 allows `tee_svc_sys_return_helper()` having the syscall exception handler return
 directly to `thread_unwind_user_mode()`.
 
@@ -263,7 +278,7 @@ Note that:
 
 ### Shared Memory Configuration
 It is the Linux kernel driver for OP-TEE that is responsible for initializing
-the shared memory pool, given information provided by the Trusted OS. The Linux
+the shared memory pool, given information provided by the OP-TEE core. The Linux
 driver issues a SMC call `OPTEE_SMC_GET_SHM_CONFIG` to retrieve the information
 * Physical address of the start of the pool
 * Size of the pool
@@ -291,7 +306,7 @@ The client application can ask for shared memory allocation using the
 GlobalPlatform Client API function `TEEC_AllocateSharedMemory()`. The client
 application can also provide shared memory through the GlobalPlatform Client API
 function `TEEC_RegisterSharedMemory()`. In such a case, the provided memory must
-be physically contiguous so that the Trusted OS, that does not handle
+be physically contiguous so that the OP-TEE core, that does not handle
 scatter-gather memory, is able to use the provided range of memory addresses.
 Note that the reference count of a shared memory chunk is incremented when
 shared memory is registered, and initialized to 1 on allocation.
@@ -301,10 +316,10 @@ Occasionally the Linux kernel driver needs to allocate shared memory for the
 communication with secure world, for example when using buffers of type
 TEEC_TempMemoryReference.
 
-### From the Trusted OS
-In case the Trusted OS needs information from the TEE supplicant (dynamic TA
+### From the OP-TEE core
+In case the OP-TEE core needs information from the TEE supplicant (dynamic TA
 loading, REE time request,...), shared memory must be allocated. Allocation
-depends on the use case. The Trusted OS asks for the following shared memory
+depends on the use case. The OP-TEE core asks for the following shared memory
 allocation:
 - `optee_msg_arg` structure, used to pass the arguments to the non-secure world,
    where the allocation will be done by sending a `OPTEE_SMC_RPC_FUNC_ALLOC`
@@ -321,7 +336,7 @@ allocation:
 ### From the TEE Supplicant
 The TEE supplicant is also working with shared memory, used to exchange data
 between normal and secure worlds. The TEE supplicant receives a memory address
-from the Trusted OS, used to store the data. This is for example the case when a
+from the OP-TEE core, used to store the data. This is for example the case when a
 Trusted Application is loaded. In this case, the TEE supplicant must register
 the provided shared memory in the same way a client application would do,
 involving the Linux driver.
@@ -331,20 +346,20 @@ OP-TEE currently requires ~256 KiB RAM for OP-TEE kernel memory. This is not a
 problem if OP-TEE uses TrustZone protected DDR, but for security reasons OP-TEE
 may need to use TrustZone protected SRAM instead. The amount of available SRAM
 varies between platforms, from just a few KiB up to over 512 KiB. Platforms with
-just a few KiB of SRAM can’t be expected to be able to run a complete TEE
+just a few KiB of SRAM cannot be expected to be able to run a complete TEE
 solution in SRAM. But those with 128 to 256 KiB of SRAM can be expected to have
 a capable TEE solution in SRAM. The pager provides a solution to this by demand
 paging parts of OP-TEE using virtual memory.
 
 ## Secure memory
 TrustZone protected SRAM is generally considered more secure than TrustZone
-protected DRAM as there's usually more attack vectors on DRAM. The attack
+protected DRAM as there is usually more attack vectors on DRAM. The attack
 vectors are hardware dependent and can be different for different platforms.
 
 ## Backing store
 TrustZone protected DRAM or in some cases non-secure DRAM is used as backing
 store. The data in the backing store is integrity protected with one hash
-(SHA-256) per page (4KiB). Readonly pages aren't encrypted since the OP-TEE
+(SHA-256) per page (4KiB). Readonly pages are not encrypted since the OP-TEE
 binary itself is not encrypted.
 
 ## Partitioning of memory
@@ -373,7 +388,7 @@ otherwise lead to deadlock. The virtual memory is partitioned as:
 +--------------+-----------------+
 ```
 Where "`nozi`" stands for "not zero initialized", this section contains entry
-stacks (thread stack when TEE pager isn't enabled) and translation tables (TEE
+stacks (thread stack when TEE pager is not enabled) and translation tables (TEE
 pager cached translation table when the pager is enabled and LPAE MMU is used).
 
 The "`init`" area is available when OP-TEE is initializing and contains
@@ -381,9 +396,9 @@ everything that is needed to initialize the pager. After the pager has been
 initialized this area will be used for demand paged instead.
 
 The "`demand alloc`" area is a special area where the pages are allocated and
-removed from the pager on demand. Those pages are returned when OP-TEE doesn't
+removed from the pager on demand. Those pages are returned when OP-TEE does not
 need them any longer. The thread stacks currently belongs this area. This means
-that when a stack isn't used the physical pages can be used by the pager for
+that when a stack is not used the physical pages can be used by the pager for
 better performance.
 
 The technique to gather code in the different area is based on compiling all
@@ -391,7 +406,7 @@ functions and data into separate sections. The unpaged text and rodata is then
 gathered by linking all object files with `--gc-sections` to eliminate sections
 that are outside the dependency graph of the entry functions for unpaged
 functions. A script analyzes this ELF file and generates the bits of the final
-link script. The process is repeated for init text and rodata.  What isn't
+link script. The process is repeated for init text and rodata.  What is not
 "unpaged" or "init" becomes "paged".
 
 ## Partitioning of the binary
@@ -431,9 +446,9 @@ The header is only used by the loader of OP-TEE, not OP-TEE itself. To
 initialize OP-TEE the loader loads the complete binary into memory and copies
 what follows the header and the following `init_size` bytes to
 `(init_load_addr_hi << 32 | init_load_addr_lo)`. `init_mem_usage` is used by the
-loader to be able to check that there's enough physical memory available for
+loader to be able to check that there is enough physical memory available for
 OP-TEE to be able to initialize at all. The loader supplies in `r0/x0` the
-address of the first byte following what wasn't copied and jumps to the load
+address of the first byte following what was not copied and jumps to the load
 address to start OP-TEE.
 
 ## Initializing the pager
@@ -465,7 +480,7 @@ void tee_pager_add_pages(tee_vaddr_t vaddr, size_t npages, bool unmap);
 `tee_pager_add_pages()` takes the physical address stored in the entry mapping
 the virtual address "vaddr" and "npages" entries after that and uses it to map
 new pages when needed. The unmap parameter tells whether the pages should be
-unmapped immediately since they doesn't contain initialized data or be kept
+unmapped immediately since they does not contain initialized data or be kept
 mapped until they need to be recycled. The pages in the "init" area are supplied
 with `unmap == false` since those page have valid content and are in use.
 
@@ -473,9 +488,9 @@ with `unmap == false` since those page have valid content and are in use.
 The pager is invoked as part of the abort handler. A pool of physical pages are
 used to map different virtual addresses. When a new virtual address needs to be
 mapped a free physical page is mapped at the new address, if a free physical
-page can't be found the oldest physical page is selected instead. When the page
+page cannot be found the oldest physical page is selected instead. When the page
 is mapped new data is copied from backing store and the hash of the page is
-verified. If it's OK the pager returns from the exception to resume the
+verified. If it is OK the pager returns from the exception to resume the
 execution.
 
 ## Paging of user TA
@@ -497,7 +512,7 @@ A memory object, MOBJ, describes a piece of memory. The interface provided
 is mostly abstract when it comes to using the MOBJ to populate translation
 tables etc.
 
-There's different kinds of MOBJs describing:
+There is different kinds of MOBJs describing:
 - physically contiguous memory
   - created with mobj_phys_alloc()
 - virtual memory
@@ -520,114 +535,135 @@ Cryptographic operations are implemented inside the TEE core by the
 implementation, as explained in [crypto.md].
 
 # 11. libutee
-TBD
+
+The GlobalPlatform Core Internal API describes services that are provided to
+Trusted Applications. libutee is a library that implements this API.
+
+libutee is a static library the Trusted Applications shall statically link
+against. Trusted Applications do execute in non-privileged secure userspace and
+libutee also aims at being executed in the non-privileged secure userspace.
+
+Some services for this API are fully statically implemented inside the
+libutee library while some services for the API are implemented inside the
+OP-TEE core (privileged level) and libutee calls such services through
+system calls.
 
 # 12. Trusted Applications
 
-## Static and Dynamic TAs
+## Pseudo TAs and Dynamically Loaded TAs
 
-There are two ways to implement Trusted Applications, static and dynamic.
-For most cases, dynamically-loaded TAs are preferred.
+There are two ways to implement Trusted Applications (TAs), pseudo TAs and
+dynamically loaded TAs. As dynamically loaded TAs are full featured Trusted
+Applications as specified by the GlobalPlatform TEE specifications, these are
+simply referred to as 'Trusted Applications'. For most cases, dynamically
+loaded TAs are preferred.
 
-### Static / Pseudo Trusted Applications
+### Pseudo Trusted Applications
 
-These are added directly to the optee_os tree in, eg, `core/arch/arm/sta`, and
-are built along with and statically built into the OP-TEE OS blob.
+These are added directly to the OP-TEE core tree in, eg, `core/arch/arm/pta`,
+and are built along with and statically built into the OP-TEE core blob.
 
-The static / pseudo Trusted Applications included in OP-TEE already are OP-TEE
-OS secure privilege layer services hidden behind a "GP TA Client" API; it's
-in these "Pseudo Trusted Applications" that the core functionality for
-communication with the REE (like "Open Session"), and API handlers from dynamic
-Trusted Applications are implemented.
+The pseudo Trusted Applications included in OP-TEE already are OP-TEE
+secure privileged level services hidden behind a "GlobalPlatform TA Client" API.
+These pseudo-TAs are used for various purpose as specific secure services or
+embedded tests services.
 
-Static TAs do not benefit from the 'GP Core Internal API' support
-specified by the GP TEE specs; Static TAs can only use the OP-TEE OS internal
-APIs and routines.
+Pseudo TAs do not benefit from the GlobalPlatform Core Internal API support
+specified by the GlobalPlatform TEE specs. These APIs are provided to TAs as a
+static library each TA shall link against (the "libutee") and that calls OP-TEE
+core service through system calls. As OP-TEE core does link with the
+libutee, Pseudo TAs can only use the OP-TEE core internal APIs and
+routines.
 
-Pseudo-TAs have the same privileged view of Secure World as the OP-TEE OS code
-itself.  For complex TAs, that may not be desirable.
+As pseudo TAs have the same privileged execution level as the OP-TEE core code
+itself, such situation may not be desirable for complex TAs.
 
 In most cases a real, dynamically loaded TA is the best choice instead of adding
-your code directly to the OP-TEE OS.  However if you decide your application
-is best handled directly in OP-TEE OS like this, you can look at
-`core/arch/arm/sta/stats.c` as a template and just add your static TA based on
+your code directly to the OP-TEE core.  However if you decide your application
+is best handled directly in OP-TEE core like this, you can look at
+`core/arch/arm/pta/stats.c` as a template and just add your pseudo TA based on
 that to the `sub.mk` in the same directory.
 
 ### Trusted Applications
 
 Trusted Applications (TAs) are applications dynamically loaded by OP-TEE
-OS in the Secure World when something in the REE wants to talk to that
-particular application UUID.  It's similar to the way the Linux
+core in the Secure World when something in the REE wants to talk to that
+particular application UUID.  It is similar to the way the Linux
 kernel can dynamically load kernel modules, although unlike with Linux, in
-OP-TEE TAs actually run at a lower CPU privilege level than OP-TEE OS code.
+OP-TEE TAs actually run at a lower CPU privileged level than OP-TEE core code.
 
-Because the TAs are signed by the same key that built the OP-TEE OS, they are
-able to be stored in the untrusted REE filesystem, and tee-supplicant will
+Because the TAs are signed by the same key that built the OP-TEE core, they
+are able to be stored in the untrusted REE filesystem, and tee-supplicant will
 take care of passing them to be checked and loaded by the Secure World OP-TEE
-OS.  Again this is simular to Linux kernel module signature checking.
+core.  Again this is simular to Linux kernel module signature checking.
 
-Trusted Application benefit from the `GP Core Internal API` as specified by
-the 'GP Specs'.
+Trusted Application benefit from the GlobalPlatform Core Internal API as
+specified by the GlobalPlatform TEE specifications.
 
 Trusted Application consist of a cleartext signed ELF file, named from the UUID
 of the TA and the suffix ".ta".
 
-They are built separately from the OP-TEE OS boot-time blob, although when
+They are built separately from the OP-TEE core boot-time blob, although when
 they are built they use the same build system, and are signed with the key
-from the build of the original OP-TEE OS blob.
+from the build of the original OP-TEE core blob.
 
 ## Special treatment of Trusted Applications
 
 ### Syscalls
 
 Dynamically loaded TAs are not directly bound to function exports in the OP-TEE
-OS blob, both because the TA code is kept at arm's length by executing at a
-different privilege level, and because TAs direct binding to addresses in the
-OS would require upgrades of all TAs synchronusly with upgrades of the OP-TEE
-OS blob.  Instead, the resolution of OP-TEE OS exports in the TA is done at
-runtime.
+core blob, both because the TA code is kept at arm's length by executing at a
+different privileged level, and because TAs direct binding to addresses in the
+core would require upgrades of all TAs synchronusly with upgrades of the
+OP-TEE core blob. Instead, the resolution of OP-TEE core exports in the TA
+is done at runtime.
 
 OP-TEE does this by using syscalls, the same kind of way as the Linux kernel
 provides a stable API for its userland programs.  TAs are written to use
-syscall wrappers to access functions exported from OP-TEE OS, so this all
-happens automatically when a TA wants to use an api exported from
-OP-TEE OS.
+syscall wrappers to access functions exported from OP-TEE core, so this all
+happens automatically when a TA wants to use an API exported from OP-TEE
+core.
 
-Static / pseudo TAs and anything else directly built into OP-TEE OS do not
+Pseudo TAs and anything else directly built into OP-TEE core do not
 require going through a syscall interface, since they can just link directly
-as they are directly part of the OS.
+as they are directly part of the core.
 
-Syscalls are provided already for all public exports from OP-TEE OS that a
+Most of the services defined by the GlobalPlatform Core Internal API are
+implemented through syscall from the TA to the OP-TEE core privileged level:
+cryptographic services, communications with other TAs, ... Some services were
+added through OP-TEE development such as ASCII message tracing.
+
+Syscalls are provided already for all public exports from OP-TEE core that a
 Dynamic TA is expected to use, so you only need to take care about this if
-you will add new exported from OP-TEE OS that TAs will want to use.
+you will add new exported from OP-TEE core that TAs will want to use.
 
 ### Malloc mapping
 
-The OP-TEE OS code has its own private memory allocation heap that is mapped
+The OP-TEE core code has its own private memory allocation heap that is mapped
 into its MMU view only and cannot be seen by Trusted Applications.  The
-OS code uses `malloc()` and `free()` style apis.
+core code uses `malloc()` and `free()` style APIs.
 
 Trusted Applications also have their own private memory allocation heaps
-that are visible to the owning TA, and to OP-TEE OS.  TAs manage their
+that are visible to the owning TA, and to OP-TEE core. TAs manage their
 heaps using `TEE_Malloc()` and `TEE_Free()` style apis.
 
-Heap|Visible to |Inaccessible to
-----|-----------|---------------
-OS  |OS         |any TA
-TA  |OS, same TA|any other TA
+Heap |Visible to   |Inaccessible to
+-----|-------------|---------------
+core |core         |any TA
+TA   |core, same TA|any other TA
 
 This enforces "Chinese Walls" between the TA views of Secure World.
 
-Since OP-TEE OS cannot perform allocations in the TA's private heap,
-and the TA is not going to be able to access allocations from the OP-TEE OS
-heap, it means only allocations from the TA heap are visible to both the
-TA and OP-TEE OS.  When performing syscalls between a TA and OP-TEE OS
+Since OP-TEE core cannot perform allocations in the TA's private heap,
+and the TA is not going to be able to access allocations from the OP-TEE
+core heap, it means only allocations from the TA heap are visible to both the
+TA and OP-TEE core.  When performing syscalls between a TA and OP-TEE core
 then, the TA side must provide all the memory allocations for buffers, etc
 used by both sides.
 
 ### Malloc pool
 
-The OP-TEE OS malloc heap is defined by `CFG_CORE_HEAP_SIZE` in `mk/config.mk`.
+The OP-TEE core malloc heap is defined by `CFG_CORE_HEAP_SIZE` in `mk/config.mk`.
 
 However for TAs, the individual TA TEE_Malloc() heap size is defined by
 `TA_DATA_SIZE` in `user_ta_header_defines.h`.  Likewise the TA stack size is

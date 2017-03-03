@@ -39,6 +39,9 @@ bool sm_from_nsec(struct sm_ctx *ctx)
 {
 	uint32_t *nsec_r0 = (uint32_t *)(&ctx->nsec.r0);
 
+	if (!sm_platform_handler(ctx))
+		return false;
+
 #ifdef CFG_PSCI_ARM32
 	if (OPTEE_SMC_OWNER_NUM(*nsec_r0) == OPTEE_SMC_OWNER_STANDARD) {
 		smc_std_handler((struct thread_smc_args *)nsec_r0);
@@ -55,9 +58,4 @@ bool sm_from_nsec(struct sm_ctx *ctx)
 	else
 		ctx->sec.mon_lr = (uint32_t)&thread_vector_table.std_smc_entry;
 	return true;	/* return into secure state */
-}
-
-/* May be overridden in platform specific code */
-__weak void sm_platform_handler(void)
-{
 }

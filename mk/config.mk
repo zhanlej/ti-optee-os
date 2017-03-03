@@ -119,9 +119,6 @@ CFG_TEE_FW_MANUFACTURER ?= FW_MAN_UNDEF
 # TEE_STORAGE_PRIVATE is passed to the trusted storage API)
 CFG_REE_FS ?= y
 
-# REE filesystem block cache support
-CFG_REE_FS_BLOCK_CACHE ?= n
-
 # RPMB file system support
 CFG_RPMB_FS ?= n
 
@@ -226,3 +223,7 @@ ifneq ($(CFG_TA_GPROF_SUPPORT),y)
 $(error Cannot instrument user libraries if user mode profiling is disabled)
 endif
 endif
+
+# CFG_GP_SOCKETS
+# Enable Global Platform Sockets support
+CFG_GP_SOCKETS ?= y

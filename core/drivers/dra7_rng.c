@@ -25,12 +25,12 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
+#include <initcall.h>
+#include <io.h>
 #include <keep.h>
 #include <kernel/interrupt.h>
 #include <kernel/misc.h>
-#include <initcall.h>
-#include <io.h>
-#include <kernel/mutex.h>
+#include <kernel/spinlock.h>
 #include <mm/core_memprot.h>
 #include <mm/core_mmu.h>
 #include <platform_config.h>
@@ -68,17 +68,17 @@
 #define	RNG_IRQSTATUS           0x1FF8
 
 #define RNG_CONTROL_STARTUP_CYCLES_SHIFT        16
-#define RNG_CONTROL_STARTUP_CYCLES_MASK         (0xffff << 16)
+#define RNG_CONTROL_STARTUP_CYCLES_MASK         GENMASK_32(31, 16)
 
 #define RNG_CONFIG_MAX_REFIL_CYCLES_SHIFT       16
-#define RNG_CONFIG_MAX_REFIL_CYCLES_MASK        (0xffff << 16)
+#define RNG_CONFIG_MAX_REFIL_CYCLES_MASK        GENMASK_32(31, 16)
 #define RNG_CONFIG_MIN_REFIL_CYCLES_SHIFT       0
-#define RNG_CONFIG_MIN_REFIL_CYCLES_MASK        (0xff << 0)
+#define RNG_CONFIG_MIN_REFIL_CYCLES_MASK        GENMASK_32(7, 0)
 
-#define RNG_ALARMCNT_ALARM_TH_SHIFT             0x0
-#define RNG_ALARMCNT_ALARM_TH_MASK              (0xff << 0)
+#define RNG_ALARMCNT_ALARM_TH_SHIFT             0
+#define RNG_ALARMCNT_ALARM_TH_MASK              GENMASK_32(7, 0)
 #define RNG_ALARMCNT_SHUTDOWN_TH_SHIFT          16
-#define RNG_ALARMCNT_SHUTDOWN_TH_MASK           (0x1f << 16)
+#define RNG_ALARMCNT_SHUTDOWN_TH_MASK           GENMASK_32(20, 16)
 
 #define RNG_CONTROL_STARTUP_CYCLES              0xff
 #define RNG_CONFIG_MIN_REFIL_CYCLES             0x21
@@ -86,41 +86,26 @@
 #define RNG_ALARM_THRESHOLD                     0xff
 #define RNG_SHUTDOWN_THRESHOLD                  0x4
 
-#define RNG_FRO_MASK    0xffffff
+#define RNG_FRO_MASK    GENMASK_32(23, 0)
 
 #define RNG_REG_SIZE    0x2000
 
 register_phys_mem(MEM_AREA_IO_SEC, RNG_BASE, RNG_REG_SIZE);
 
-static struct mutex rng_mutex = MUTEX_INITIALIZER;
-
-static vaddr_t rng_base(void)
-{
-	static void *va __early_bss;
-
-	if (cpu_mmu_enabled()) {
-		if (!va)
-			va = phys_to_virt(RNG_BASE, MEM_AREA_IO_SEC);
-		return (vaddr_t)va;
-	}
-
-	return RNG_BASE;
-}
+static unsigned int rng_lock = SPINLOCK_UNLOCK;
 
 uint8_t hw_get_random_byte(void)
 {
-	static vaddr_t rng;
 	static int pos;
 	static union {
-		uint64_t val;
+		uint32_t val[2];
 		uint8_t byte[8];
 	} random;
+	vaddr_t rng = (vaddr_t)phys_to_virt(RNG_BASE, MEM_AREA_IO_SEC);
 	uint8_t ret;
 
-	mutex_lock(&rng_mutex);
-
-	if (!rng)
-		rng = rng_base();
+	uint32_t exceptions = thread_mask_exceptions(THREAD_EXCP_ALL);
+	cpu_spin_lock(&rng_lock);
 
 	if (!pos) {
 		/* Is the result ready (available)? */
@@ -143,25 +128,25 @@ uint8_t hw_get_random_byte(void)
 			}
 		}
 		/* Read random value */
-		random.val = read32(rng + RNG_OUTPUT_L);
-		random.val |= SHIFT_U64(read32(rng + RNG_OUTPUT_H), 32);
+		random.val[0] = read32(rng + RNG_OUTPUT_L);
+		random.val[1] = read32(rng + RNG_OUTPUT_H);
 		/* Acknowledge read complete */
 		write32(RNG_READY, rng + RNG_INTACK);
 	}
 
-	ret = random.byte[pos++];
+	ret = random.byte[pos];
 
-	if (pos == 8)
-		pos = 0;
+	pos = (pos + 1) % 8;
 
-	mutex_unlock(&rng_mutex);
+	cpu_spin_unlock(&rng_lock);
+	thread_set_exceptions(exceptions);
 
 	return ret;
 }
 
 static TEE_Result dra7_rng_init(void)
 {
-	vaddr_t rng = rng_base();
+	vaddr_t rng = (vaddr_t)phys_to_virt(RNG_BASE, MEM_AREA_IO_SEC);
 	uint32_t val;
 
 	/* Execute a software reset */
@@ -193,13 +178,15 @@ static TEE_Result dra7_rng_init(void)
 	/* Enable all FROs */
 	write32(0xffffff, rng + RNG_FROENABLE);
 
-	/* Select the maximum number of samples after
+	/*
+	 * Select the maximum number of samples after
 	 * which if a repeating pattern is still detected, an
 	 * alarm event is generated
 	 */
 	val = RNG_ALARM_THRESHOLD << RNG_ALARMCNT_ALARM_TH_SHIFT;
 
-	/* Set the shutdown threshold to the number of FROs
+	/*
+	 * Set the shutdown threshold to the number of FROs
 	 * allowed to be shut downed
 	 */
 	val |= RNG_SHUTDOWN_THRESHOLD << RNG_ALARMCNT_SHUTDOWN_TH_SHIFT;

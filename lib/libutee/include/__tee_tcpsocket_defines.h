@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014, STMicroelectronics International N.V.
+ * Copyright (c) 2016-2017, Linaro Limited
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -25,40 +25,13 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#ifndef TEE_FS_DEFS_H
-#define TEE_FS_DEFS_H
+#ifndef ____TEE_TCPSOCKET_DEFINES_H
+#define ____TEE_TCPSOCKET_DEFINES_H
 
-/*
- * tee_fs_open
- */
-#define TEE_FS_O_RDONLY 0x1
-#define TEE_FS_O_WRONLY 0x2
-#define TEE_FS_O_RDWR   0x4
-#define TEE_FS_O_CREATE 0x8
-#define TEE_FS_O_EXCL   0x10
-#define TEE_FS_O_APPEND 0x20
-#define TEE_FS_O_TRUNC  0x40
+/* Protocol identifier */
+#define TEE_ISOCKET_PROTOCOLID_TCP			0x65
 
-/*
- * tee_fs_lseek
- */
-#define TEE_FS_SEEK_SET 0x1
-#define TEE_FS_SEEK_END 0x2
-#define TEE_FS_SEEK_CUR 0x4
+/* Instance specific errors */
+#define TEE_ISOCKET_TCP_WARNING_UNKNOWN_OUT_OF_BAND	0xF1010002
 
-/*
- * file modes
- */
-#define TEE_FS_S_IWUSR 0x1
-#define TEE_FS_S_IRUSR 0x2
-#define TEE_FS_S_IXUSR 0x4
-
-/*
- * access modes
- * X_OK is not supported
- */
-#define TEE_FS_R_OK    0x1
-#define TEE_FS_W_OK    0x2
-#define TEE_FS_F_OK    0x4
-
-#endif
+#endif /*____TEE_TCPSOCKET_DEFINES_H*/
