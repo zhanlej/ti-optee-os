@@ -1115,7 +1115,7 @@ void thread_add_mutex(struct mutex *m)
 	int ct = l->curr_thread;
 
 	assert(ct != -1 && threads[ct].state == THREAD_STATE_ACTIVE);
-	assert(m->owner_id == -1);
+	assert(m->owner_id == MUTEX_OWNER_ID_NONE);
 	m->owner_id = ct;
 	TAILQ_INSERT_TAIL(&threads[ct].mutexes, m, link);
 }
@@ -1127,7 +1127,7 @@ void thread_rem_mutex(struct mutex *m)
 
 	assert(ct != -1 && threads[ct].state == THREAD_STATE_ACTIVE);
 	assert(m->owner_id == ct);
-	m->owner_id = -1;
+	m->owner_id = MUTEX_OWNER_ID_NONE;
 	TAILQ_REMOVE(&threads[ct].mutexes, m, link);
 }
 
@@ -1199,7 +1199,14 @@ static uint32_t rpc_cmd_nolock(uint32_t cmd, size_t num_params,
 
 	assert(arg && carg && num_params <= THREAD_RPC_MAX_NUM_PARAMS);
 
-	plat_prng_add_jitter_entropy_norpc();
+
+	/*
+	 * Break recursion in case plat_prng_add_jitter_entropy_norpc()
+	 * sleeps on a mutex or unlocks a mutex with a sleeper (contended
+	 * mutex).
+	 */
+	if (cmd != OPTEE_MSG_RPC_CMD_WAIT_QUEUE)
+		plat_prng_add_jitter_entropy_norpc();
 
 	memset(arg, 0, OPTEE_MSG_GET_ARG_SIZE(THREAD_RPC_MAX_NUM_PARAMS));
 	arg->cmd = cmd;
