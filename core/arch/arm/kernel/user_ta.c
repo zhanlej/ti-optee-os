@@ -194,8 +194,8 @@ static TEE_Result config_final_paging(struct user_ta_ctx *utc)
 	size_t vasize = utc->mmu->ta_private_vmem_end -
 			utc->mmu->ta_private_vmem_start;
 
-	cache_maintenance_l1(DCACHE_AREA_CLEAN, va, vasize);
-	cache_maintenance_l1(ICACHE_AREA_INVALIDATE, va, vasize);
+	cache_op_inner(DCACHE_AREA_CLEAN, va, vasize);
+	cache_op_inner(ICACHE_AREA_INVALIDATE, va, vasize);
 	return TEE_SUCCESS;
 }
 #endif /*!CFG_PAGED_USER_TA*/
@@ -386,7 +386,7 @@ static TEE_Result ta_load(const TEE_UUID *uuid, const struct shdr *signed_ta,
 	uint32_t man_flags = TA_FLAG_USER_MODE | TA_FLAG_EXEC_DDR;
 	/* opt_flags: optional flags */
 	uint32_t opt_flags = man_flags | TA_FLAG_SINGLE_INSTANCE |
-	    TA_FLAG_MULTI_SESSION | TA_FLAG_UNSAFE_NW_PARAMS |
+	    TA_FLAG_MULTI_SESSION | TA_FLAG_SECURE_DATA_PATH |
 	    TA_FLAG_INSTANCE_KEEP_ALIVE | TA_FLAG_CACHE_MAINTENANCE;
 	struct user_ta_ctx *utc = NULL;
 	struct shdr *sec_shdr = NULL;
@@ -748,8 +748,8 @@ static void user_ta_ctx_destroy(struct tee_ta_ctx *ctx)
 			va = mobj_get_va(utc->mobj_code, 0);
 			if (va) {
 				memset(va, 0, utc->mobj_code->size);
-				cache_maintenance_l1(DCACHE_AREA_CLEAN, va,
-						     utc->mobj_code->size);
+				cache_op_inner(DCACHE_AREA_CLEAN, va,
+						utc->mobj_code->size);
 			}
 		}
 
@@ -757,8 +757,8 @@ static void user_ta_ctx_destroy(struct tee_ta_ctx *ctx)
 			va = mobj_get_va(utc->mobj_stack, 0);
 			if (va) {
 				memset(va, 0, utc->mobj_stack->size);
-				cache_maintenance_l1(DCACHE_AREA_CLEAN, va,
-						     utc->mobj_stack->size);
+				cache_op_inner(DCACHE_AREA_CLEAN, va,
+						utc->mobj_stack->size);
 			}
 		}
 	}

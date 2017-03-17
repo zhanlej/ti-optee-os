@@ -648,7 +648,7 @@ int core_tlb_maintenance(int op, unsigned int a)
 	return 0;
 }
 
-unsigned int cache_maintenance_l1(int op, void *va, size_t len)
+TEE_Result cache_op_inner(enum cache_op op, void *va, size_t len)
 {
 	switch (op) {
 	case DCACHE_CLEAN:
@@ -672,10 +672,6 @@ unsigned int cache_maintenance_l1(int op, void *va, size_t len)
 		if (len)
 			arm_cl1_i_inv(va, (char *)va + len - 1);
 		break;
-	case WRITE_BUFFER_DRAIN:
-		DMSG("unsupported operation 0x%X (WRITE_BUFFER_DRAIN)",
-		     (unsigned int)op);
-		return -1;
 	case DCACHE_CLEAN_INV:
 		arm_cl1_d_cleaninvbysetway();
 		break;
@@ -690,31 +686,31 @@ unsigned int cache_maintenance_l1(int op, void *va, size_t len)
 }
 
 #ifdef CFG_PL310
-unsigned int cache_maintenance_l2(int op, paddr_t pa, size_t len)
+TEE_Result cache_op_outer(enum cache_op op, paddr_t pa, size_t len)
 {
-	unsigned int ret = TEE_SUCCESS;
+	TEE_Result ret = TEE_SUCCESS;
 	uint32_t exceptions = thread_mask_exceptions(THREAD_EXCP_FOREIGN_INTR);
 
 	tee_l2cc_mutex_lock();
 	switch (op) {
-	case L2CACHE_INVALIDATE:
+	case DCACHE_INVALIDATE:
 		arm_cl2_invbyway(pl310_base());
 		break;
-	case L2CACHE_AREA_INVALIDATE:
+	case DCACHE_AREA_INVALIDATE:
 		if (len)
 			arm_cl2_invbypa(pl310_base(), pa, pa + len - 1);
 		break;
-	case L2CACHE_CLEAN:
+	case DCACHE_CLEAN:
 		arm_cl2_cleanbyway(pl310_base());
 		break;
-	case L2CACHE_AREA_CLEAN:
+	case DCACHE_AREA_CLEAN:
 		if (len)
 			arm_cl2_cleanbypa(pl310_base(), pa, pa + len - 1);
 		break;
-	case L2CACHE_CLEAN_INV:
+	case DCACHE_CLEAN_INV:
 		arm_cl2_cleaninvbyway(pl310_base());
 		break;
-	case L2CACHE_AREA_CLEAN_INV:
+	case DCACHE_AREA_CLEAN_INV:
 		if (len)
 			arm_cl2_cleaninvbypa(pl310_base(), pa, pa + len - 1);
 		break;

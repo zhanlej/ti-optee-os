@@ -93,12 +93,6 @@ __weak void plat_cpu_reset_late(void)
 KEEP_PAGER(plat_cpu_reset_late);
 
 /* May be overridden in plat-$(PLATFORM)/main.c */
-__weak void plat_cpu_reset_early(void)
-{
-}
-KEEP_PAGER(plat_cpu_reset_early);
-
-/* May be overridden in plat-$(PLATFORM)/main.c */
 __weak void main_init_gic(void)
 {
 }
@@ -289,9 +283,8 @@ static void init_runtime(unsigned long pageable_part)
 		p = (uint8_t *)(((vaddr_t)__init_start + init_size) &
 				~SMALL_PAGE_MASK);
 
-		cache_maintenance_l1(DCACHE_AREA_CLEAN, p, SMALL_PAGE_SIZE);
-		cache_maintenance_l1(ICACHE_AREA_INVALIDATE, p,
-				     SMALL_PAGE_SIZE);
+		cache_op_inner(DCACHE_AREA_CLEAN, p, SMALL_PAGE_SIZE);
+		cache_op_inner(ICACHE_AREA_INVALIDATE, p, SMALL_PAGE_SIZE);
 	}
 
 	/*
