@@ -52,6 +52,7 @@ enum buf_is_attr {
 	CORE_MEM_SEC,
 	CORE_MEM_TEE_RAM,
 	CORE_MEM_TA_RAM,
+	CORE_MEM_SDP_MEM,
 };
 
 /* redirect legacy tee_vbuf_is() and tee_pbuf_is() to our routines */
@@ -92,6 +93,13 @@ bool core_vbuf_is(uint32_t flags, const void *vbuf, size_t len);
  * Returns NULL on failure or a valid virtual address on success.
  */
 void *phys_to_virt(paddr_t pa, enum teecore_memtypes m);
+
+/*
+ * Translate physical address to virtual address trying MEM_AREA_IO_SEC
+ * first then MEM_AREA_IO_NSEC if not found.
+ * Returns NULL on failure or a valid virtual address on success.
+ */
+void *phys_to_virt_io(paddr_t pa);
 
 /*
  * Translate virtual address to physical address

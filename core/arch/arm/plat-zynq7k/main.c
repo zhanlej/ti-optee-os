@@ -61,6 +61,7 @@ static const struct thread_handlers handlers = {
 };
 
 static struct gic_data gic_data;
+static struct cdns_uart_data console_data __early_bss;
 
 register_phys_mem(MEM_AREA_IO_NSEC, CONSOLE_UART_BASE, CORE_MMU_DEVICE_SIZE);
 register_phys_mem(MEM_AREA_IO_SEC, GIC_BASE, CORE_MMU_DEVICE_SIZE);
@@ -117,33 +118,10 @@ void plat_cpu_reset_late(void)
 	}
 }
 
-static vaddr_t console_base(void)
-{
-	static void *va __early_bss;
-
-	if (cpu_mmu_enabled()) {
-		if (!va)
-			va = phys_to_virt(CONSOLE_UART_BASE,
-					  MEM_AREA_IO_NSEC);
-		return (vaddr_t)va;
-	}
-	return CONSOLE_UART_BASE;
-}
-
 void console_init(void)
 {
-}
-
-void console_putc(int ch)
-{
-	if (ch == '\n')
-		cdns_uart_putc('\r', console_base());
-	cdns_uart_putc(ch, console_base());
-}
-
-void console_flush(void)
-{
-	cdns_uart_flush(console_base());
+	cdns_uart_init(&console_data, CONSOLE_UART_BASE, 0, 0);
+	register_serial_console(&console_data.chip);
 }
 
 vaddr_t pl310_base(void)

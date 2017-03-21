@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016, Linaro Limited
+ * Copyright (c) 2017, Linaro Limited
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -26,42 +26,31 @@
  */
 
 #include <console.h>
-#include <drivers/serial8250_uart.h>
-#include <mm/core_memprot.h>
-#include <platform_config.h>
+#include <compiler.h>
+#include <drivers/serial.h>
+#include <stdlib.h>
 
-register_phys_mem(MEM_AREA_IO_NSEC,
-		  CONSOLE_UART_BASE,
-		  SERIAL8250_UART_REG_SIZE);
+static struct serial_chip *serial_console __early_bss;
 
-static vaddr_t console_base(void)
+void __weak console_putc(int ch)
 {
-	static void *va __early_bss;
-
-	if (cpu_mmu_enabled()) {
-		if (!va)
-			va = phys_to_virt(CONSOLE_UART_BASE, MEM_AREA_IO_NSEC);
-		return (vaddr_t)va;
-	}
-	return CONSOLE_UART_BASE;
-}
-
-void console_init(void)
-{
-	serial8250_uart_init(console_base(), CONSOLE_UART_CLK_IN_HZ,
-			     CONSOLE_BAUDRATE);
-}
-
-void console_putc(int ch)
-{
-	vaddr_t base = console_base();
+	if (!serial_console)
+		return;
 
 	if (ch == '\n')
-		serial8250_uart_putc('\r', base);
-	serial8250_uart_putc(ch, base);
+		serial_console->ops->putc(serial_console, '\r');
+	serial_console->ops->putc(serial_console, ch);
 }
 
-void console_flush(void)
+void __weak console_flush(void)
 {
-	serial8250_uart_flush_tx_fifo(console_base());
+	if (!serial_console)
+		return;
+
+	serial_console->ops->flush(serial_console);
+}
+
+void register_serial_console(struct serial_chip *chip)
+{
+	serial_console = chip;
 }

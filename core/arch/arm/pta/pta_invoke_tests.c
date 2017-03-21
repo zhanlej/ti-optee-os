@@ -24,23 +24,21 @@
  * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
  * POSSIBILITY OF SUCH DAMAGE.
  */
+
 #include <compiler.h>
-#include <types_ext.h>
 #include <kernel/pseudo_ta.h>
-#include <trace.h>
-#include <tee_api_types.h>
+#include <mm/core_memprot.h>
+#include <pta_invoke_tests.h>
+#include <string.h>
+#include <tee/cache.h>
 #include <tee_api_defines.h>
+#include <tee_api_types.h>
+#include <trace.h>
+#include <types_ext.h>
+
 #include "core_self_tests.h"
 
-#define TA_NAME		"sta_self_tests.ta"
-
-#define STA_SELF_TEST_UUID \
-		{ 0xd96a5b40, 0xc3e5, 0x21e3, \
-			{ 0x87, 0x94, 0x10, 0x02, 0xa5, 0xd5, 0xc6, 0x1b } }
-
-#define CMD_TRACE	0
-#define CMD_PARAMS	1
-#define CMD_SELF_TESTS	2
+#define TA_NAME		"invoke_tests.pta"
 
 static TEE_Result test_trace(uint32_t param_types __unused,
 			TEE_Param params[TEE_NUM_PARAMS] __unused)
@@ -196,6 +194,116 @@ static TEE_Result test_entry_params(uint32_t type, TEE_Param p[TEE_NUM_PARAMS])
 }
 
 /*
+ * Test access to Secure Data Path memory from pseudo TAs
+ */
+
+static TEE_Result test_inject_sdp(uint32_t type, TEE_Param p[TEE_NUM_PARAMS])
+{
+	char *src = p[0].memref.buffer;
+	char *dst = p[1].memref.buffer;
+	size_t sz = p[0].memref.size;
+	uint32_t exp_pt = TEE_PARAM_TYPES(TEE_PARAM_TYPE_MEMREF_INPUT,
+					  TEE_PARAM_TYPE_MEMREF_OUTPUT,
+					  TEE_PARAM_TYPE_NONE,
+					  TEE_PARAM_TYPE_NONE);
+
+	if (exp_pt != type) {
+		DMSG("bad parameter types");
+		return TEE_ERROR_BAD_PARAMETERS;
+	}
+
+	if (p[1].memref.size < sz) {
+		p[1].memref.size = sz;
+		return TEE_ERROR_SHORT_BUFFER;
+	}
+
+
+	if (!core_vbuf_is(CORE_MEM_NSEC_SHM, src, sz) ||
+	    !core_vbuf_is(CORE_MEM_SDP_MEM, dst, sz)) {
+		DMSG("bad memref secure attribute");
+		return TEE_ERROR_BAD_PARAMETERS;
+	}
+
+	if (cache_operation(TEE_CACHEFLUSH, dst, sz) != TEE_SUCCESS)
+		return TEE_ERROR_GENERIC;
+
+	memcpy(dst, src, sz);
+
+	if (cache_operation(TEE_CACHEFLUSH, dst, sz) != TEE_SUCCESS)
+		return TEE_ERROR_GENERIC;
+
+	return TEE_SUCCESS;
+}
+
+static TEE_Result test_transform_sdp(uint32_t type, TEE_Param p[TEE_NUM_PARAMS])
+{
+	char *buf = p[0].memref.buffer;
+	size_t sz = p[0].memref.size;
+	uint32_t exp_pt = TEE_PARAM_TYPES(TEE_PARAM_TYPE_MEMREF_INOUT,
+					  TEE_PARAM_TYPE_NONE,
+					  TEE_PARAM_TYPE_NONE,
+					  TEE_PARAM_TYPE_NONE);
+
+	if (exp_pt != type) {
+		DMSG("bad parameter types");
+		return TEE_ERROR_BAD_PARAMETERS;
+	}
+
+	if (!core_vbuf_is(CORE_MEM_SDP_MEM, buf, sz)) {
+		DMSG("bad memref secure attribute");
+		return TEE_ERROR_BAD_PARAMETERS;
+	}
+
+	if (cache_operation(TEE_CACHEFLUSH, buf, sz) != TEE_SUCCESS)
+		return TEE_ERROR_GENERIC;
+
+	for (; sz; sz--, buf++)
+		*buf = ~(*buf) + 1;
+
+	if (cache_operation(TEE_CACHEFLUSH, buf, sz) != TEE_SUCCESS)
+		return TEE_ERROR_GENERIC;
+
+	return TEE_SUCCESS;
+}
+
+static TEE_Result test_dump_sdp(uint32_t type, TEE_Param p[TEE_NUM_PARAMS])
+{
+	char *src = p[0].memref.buffer;
+	char *dst = p[1].memref.buffer;
+	size_t sz = p[0].memref.size;
+	uint32_t exp_pt = TEE_PARAM_TYPES(TEE_PARAM_TYPE_MEMREF_INPUT,
+					  TEE_PARAM_TYPE_MEMREF_OUTPUT,
+					  TEE_PARAM_TYPE_NONE,
+					  TEE_PARAM_TYPE_NONE);
+
+	if (exp_pt != type) {
+		DMSG("bad parameter types");
+		return TEE_ERROR_BAD_PARAMETERS;
+	}
+
+	if (p[1].memref.size < sz) {
+		p[1].memref.size = sz;
+		return TEE_ERROR_SHORT_BUFFER;
+	}
+
+	if (!core_vbuf_is(CORE_MEM_SDP_MEM, src, sz) ||
+	    !core_vbuf_is(CORE_MEM_NSEC_SHM, dst, sz)) {
+		DMSG("bad memref secure attribute");
+		return TEE_ERROR_BAD_PARAMETERS;
+	}
+
+	if (cache_operation(TEE_CACHEFLUSH, dst, sz) != TEE_SUCCESS)
+		return TEE_ERROR_GENERIC;
+
+	memcpy(dst, src, sz);
+
+	if (cache_operation(TEE_CACHEFLUSH, dst, sz) != TEE_SUCCESS)
+		return TEE_ERROR_GENERIC;
+
+	return TEE_SUCCESS;
+}
+
+/*
  * Trusted Application Entry Points
  */
 
@@ -230,11 +338,17 @@ static TEE_Result invoke_command(void *pSessionContext __unused,
 	DMSG("command entry point for pseudo ta \"%s\"", TA_NAME);
 
 	switch (nCommandID) {
-	case CMD_TRACE:
+	case PTA_INVOKE_TESTS_CMD_TRACE:
 		return test_trace(nParamTypes, pParams);
-	case CMD_PARAMS:
+	case PTA_INVOKE_TESTS_CMD_PARAMS:
 		return test_entry_params(nParamTypes, pParams);
-	case CMD_SELF_TESTS:
+	case PTA_INVOKE_TESTS_CMD_COPY_NSEC_TO_SEC:
+		return test_inject_sdp(nParamTypes, pParams);
+	case PTA_INVOKE_TESTS_CMD_READ_MODIFY_SEC:
+		return test_transform_sdp(nParamTypes, pParams);
+	case PTA_INVOKE_TESTS_CMD_COPY_SEC_TO_NSEC:
+		return test_dump_sdp(nParamTypes, pParams);
+	case PTA_INVOKE_TESTS_CMD_SELF_TESTS:
 		return core_self_tests(nParamTypes, pParams);
 	default:
 		break;
@@ -242,8 +356,8 @@ static TEE_Result invoke_command(void *pSessionContext __unused,
 	return TEE_ERROR_BAD_PARAMETERS;
 }
 
-pseudo_ta_register(.uuid = STA_SELF_TEST_UUID, .name = TA_NAME,
-		   .flags = PTA_DEFAULT_FLAGS,
+pseudo_ta_register(.uuid = PTA_INVOKE_TESTS_UUID, .name = TA_NAME,
+		   .flags = PTA_DEFAULT_FLAGS | TA_FLAG_SECURE_DATA_PATH,
 		   .create_entry_point = create_ta,
 		   .destroy_entry_point = destroy_ta,
 		   .open_session_entry_point = open_session,

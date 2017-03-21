@@ -50,7 +50,6 @@
 
 struct tee_fs_fd {
 	struct tee_fs_htree *ht;
-	tee_fs_off_t pos;
 	int fd;
 };
 
@@ -61,10 +60,11 @@ static int pos_to_block_num(int position)
 
 static struct mutex ree_fs_mutex = MUTEX_INITIALIZER;
 
-static TEE_Result ree_fs_opendir_rpc(const char *name, struct tee_fs_dir **d)
+static TEE_Result ree_fs_opendir_rpc(const TEE_UUID *uuid,
+				     struct tee_fs_dir **d)
 
 {
-	return tee_fs_rpc_opendir(OPTEE_MSG_RPC_CMD_FS, name, d);
+	return tee_fs_rpc_opendir(OPTEE_MSG_RPC_CMD_FS, uuid, d);
 }
 
 static void ree_fs_closedir_rpc(struct tee_fs_dir *d)
@@ -79,16 +79,15 @@ static TEE_Result ree_fs_readdir_rpc(struct tee_fs_dir *d,
 	return tee_fs_rpc_readdir(OPTEE_MSG_RPC_CMD_FS, d, ent);
 }
 
-static TEE_Result out_of_place_write(struct tee_fs_fd *fdp, const void *buf,
-				     size_t len)
+static TEE_Result out_of_place_write(struct tee_fs_fd *fdp, size_t pos,
+				     const void *buf, size_t len)
 {
 	TEE_Result res;
-	size_t start_block_num = pos_to_block_num(fdp->pos);
-	size_t end_block_num = pos_to_block_num(fdp->pos + len - 1);
+	size_t start_block_num = pos_to_block_num(pos);
+	size_t end_block_num = pos_to_block_num(pos + len - 1);
 	size_t remain_bytes = len;
 	uint8_t *data_ptr = (uint8_t *)buf;
 	uint8_t *block;
-	tee_fs_off_t orig_pos = fdp->pos;
 	struct tee_fs_htree_meta *meta = tee_fs_htree_get_meta(fdp->ht);
 
 	block = malloc(BLOCK_SIZE);
@@ -96,7 +95,7 @@ static TEE_Result out_of_place_write(struct tee_fs_fd *fdp, const void *buf,
 		return TEE_ERROR_OUT_OF_MEMORY;
 
 	while (start_block_num <= end_block_num) {
-		int offset = fdp->pos % BLOCK_SIZE;
+		size_t offset = pos % BLOCK_SIZE;
 		size_t size_to_write = MIN(remain_bytes, (size_t)BLOCK_SIZE);
 
 		if (size_to_write + offset > BLOCK_SIZE)
@@ -126,16 +125,14 @@ static TEE_Result out_of_place_write(struct tee_fs_fd *fdp, const void *buf,
 			data_ptr += size_to_write;
 		remain_bytes -= size_to_write;
 		start_block_num++;
-		fdp->pos += size_to_write;
+		pos += size_to_write;
 	}
 
-	if (fdp->pos > (tee_fs_off_t)meta->length)
-		meta->length = fdp->pos;
+	if (pos > meta->length)
+		meta->length = pos;
 
 exit:
 	free(block);
-	if (res != TEE_SUCCESS)
-		fdp->pos = orig_pos;
 	return res;
 }
 
@@ -255,19 +252,11 @@ static const struct tee_fs_htree_storage ree_fs_storage_ops = {
 	.rpc_write_init = ree_fs_rpc_write_init,
 };
 
-static TEE_Result open_internal(const char *file, bool create,
+static TEE_Result open_internal(struct tee_pobj *po, bool create,
 				struct tee_file_handle **fh)
 {
 	TEE_Result res;
-	size_t len;
 	struct tee_fs_fd *fdp = NULL;
-
-	if (!file)
-		return TEE_ERROR_BAD_PARAMETERS;
-
-	len = strlen(file) + 1;
-	if (len > TEE_FS_NAME_MAX)
-		return TEE_ERROR_BAD_PARAMETERS;
 
 	fdp = calloc(1, sizeof(struct tee_fs_fd));
 	if (!fdp)
@@ -277,9 +266,9 @@ static TEE_Result open_internal(const char *file, bool create,
 	mutex_lock(&ree_fs_mutex);
 
 	if (create)
-		res = tee_fs_rpc_create(OPTEE_MSG_RPC_CMD_FS, file, &fdp->fd);
+		res = tee_fs_rpc_create(OPTEE_MSG_RPC_CMD_FS, po, &fdp->fd);
 	else
-		res = tee_fs_rpc_open(OPTEE_MSG_RPC_CMD_FS, file, &fdp->fd);
+		res = tee_fs_rpc_open(OPTEE_MSG_RPC_CMD_FS, po, &fdp->fd);
 
 	if (res != TEE_SUCCESS)
 		goto out;
@@ -292,7 +281,7 @@ out:
 		if (fdp->fd != -1)
 			tee_fs_rpc_close(OPTEE_MSG_RPC_CMD_FS, fdp->fd);
 		if (create)
-			tee_fs_rpc_remove(OPTEE_MSG_RPC_CMD_FS, file);
+			tee_fs_rpc_remove(OPTEE_MSG_RPC_CMD_FS, po);
 		free(fdp);
 	}
 
@@ -300,14 +289,15 @@ out:
 	return res;
 }
 
-static TEE_Result ree_fs_open(const char *file, struct tee_file_handle **fh)
+static TEE_Result ree_fs_open(struct tee_pobj *po, struct tee_file_handle **fh)
 {
-	return open_internal(file, false, fh);
+	return open_internal(po, false, fh);
 }
 
-static TEE_Result ree_fs_create(const char *file, struct tee_file_handle **fh)
+static TEE_Result ree_fs_create(struct tee_pobj *po,
+				struct tee_file_handle **fh)
 {
-	return open_internal(file, true, fh);
+	return open_internal(po, true, fh);
 }
 
 static void ree_fs_close(struct tee_file_handle **fh)
@@ -322,54 +312,6 @@ static void ree_fs_close(struct tee_file_handle **fh)
 	}
 }
 
-static TEE_Result ree_fs_seek(struct tee_file_handle *fh, int32_t offset,
-			      TEE_Whence whence, int32_t *new_offs)
-{
-	TEE_Result res;
-	tee_fs_off_t new_pos;
-	size_t filelen;
-	struct tee_fs_fd *fdp = (struct tee_fs_fd *)fh;
-
-	mutex_lock(&ree_fs_mutex);
-
-	filelen = tee_fs_htree_get_meta(fdp->ht)->length;
-
-	switch (whence) {
-	case TEE_DATA_SEEK_SET:
-		new_pos = offset;
-		break;
-
-	case TEE_DATA_SEEK_CUR:
-		new_pos = fdp->pos + offset;
-		break;
-
-	case TEE_DATA_SEEK_END:
-		new_pos = filelen + offset;
-		break;
-
-	default:
-		res = TEE_ERROR_BAD_PARAMETERS;
-		goto exit;
-	}
-
-	if (new_pos < 0)
-		new_pos = 0;
-
-	if (new_pos > TEE_DATA_MAX_POSITION) {
-		EMSG("Position is beyond TEE_DATA_MAX_POSITION");
-		res = TEE_ERROR_BAD_PARAMETERS;
-		goto exit;
-	}
-
-	fdp->pos = new_pos;
-	if (new_offs)
-		*new_offs = new_pos;
-	res = TEE_SUCCESS;
-exit:
-	mutex_unlock(&ree_fs_mutex);
-	return res;
-}
-
 static TEE_Result ree_fs_ftruncate_internal(struct tee_fs_fd *fdp,
 					    tee_fs_off_t new_file_len)
 {
@@ -378,11 +320,8 @@ static TEE_Result ree_fs_ftruncate_internal(struct tee_fs_fd *fdp,
 
 	if ((size_t)new_file_len > meta->length) {
 		size_t ext_len = new_file_len - meta->length;
-		int orig_pos = fdp->pos;
 
-		fdp->pos = meta->length;
-		res = out_of_place_write(fdp, NULL, ext_len);
-		fdp->pos = orig_pos;
+		res = out_of_place_write(fdp, meta->length, NULL, ext_len);
 		if (res != TEE_SUCCESS)
 			return res;
 	} else {
@@ -411,8 +350,8 @@ static TEE_Result ree_fs_ftruncate_internal(struct tee_fs_fd *fdp,
 	return tee_fs_htree_sync_to_storage(&fdp->ht);
 }
 
-static TEE_Result ree_fs_read(struct tee_file_handle *fh, void *buf,
-			      size_t *len)
+static TEE_Result ree_fs_read(struct tee_file_handle *fh, size_t pos,
+			      void *buf, size_t *len)
 {
 	TEE_Result res;
 	int start_block_num;
@@ -426,12 +365,10 @@ static TEE_Result ree_fs_read(struct tee_file_handle *fh, void *buf,
 	mutex_lock(&ree_fs_mutex);
 
 	remain_bytes = *len;
-	if ((fdp->pos + remain_bytes) < remain_bytes ||
-	    fdp->pos > (tee_fs_off_t)meta->length)
+	if ((pos + remain_bytes) < remain_bytes || pos > meta->length)
 		remain_bytes = 0;
-	else if (fdp->pos + (tee_fs_off_t)remain_bytes >
-		 (tee_fs_off_t)meta->length)
-		remain_bytes = meta->length - fdp->pos;
+	else if (pos + remain_bytes > meta->length)
+		remain_bytes = meta->length - pos;
 
 	*len = remain_bytes;
 
@@ -440,8 +377,8 @@ static TEE_Result ree_fs_read(struct tee_file_handle *fh, void *buf,
 		goto exit;
 	}
 
-	start_block_num = pos_to_block_num(fdp->pos);
-	end_block_num = pos_to_block_num(fdp->pos + remain_bytes - 1);
+	start_block_num = pos_to_block_num(pos);
+	end_block_num = pos_to_block_num(pos + remain_bytes - 1);
 
 	block = malloc(BLOCK_SIZE);
 	if (!block) {
@@ -450,7 +387,7 @@ static TEE_Result ree_fs_read(struct tee_file_handle *fh, void *buf,
 	}
 
 	while (start_block_num <= end_block_num) {
-		tee_fs_off_t offset = fdp->pos % BLOCK_SIZE;
+		size_t offset = pos % BLOCK_SIZE;
 		size_t size_to_read = MIN(remain_bytes, (size_t)BLOCK_SIZE);
 
 		if (size_to_read + offset > BLOCK_SIZE)
@@ -464,7 +401,7 @@ static TEE_Result ree_fs_read(struct tee_file_handle *fh, void *buf,
 
 		data_ptr += size_to_read;
 		remain_bytes -= size_to_read;
-		fdp->pos += size_to_read;
+		pos += size_to_read;
 
 		start_block_num++;
 	}
@@ -475,8 +412,8 @@ exit:
 	return res;
 }
 
-static TEE_Result ree_fs_write(struct tee_file_handle *fh, const void *buf,
-			       size_t len)
+static TEE_Result ree_fs_write(struct tee_file_handle *fh, size_t pos,
+			       const void *buf, size_t len)
 {
 	TEE_Result res;
 	struct tee_fs_fd *fdp = (struct tee_fs_fd *)fh;
@@ -489,18 +426,18 @@ static TEE_Result ree_fs_write(struct tee_file_handle *fh, const void *buf,
 
 	file_size = tee_fs_htree_get_meta(fdp->ht)->length;
 
-	if ((fdp->pos + len) < len) {
+	if ((pos + len) < len) {
 		res = TEE_ERROR_BAD_PARAMETERS;
 		goto exit;
 	}
 
-	if (file_size < (size_t)fdp->pos) {
-		res = ree_fs_ftruncate_internal(fdp, fdp->pos);
+	if (file_size < pos) {
+		res = ree_fs_ftruncate_internal(fdp, pos);
 		if (res != TEE_SUCCESS)
 			goto exit;
 	}
 
-	res = out_of_place_write(fdp, buf, len);
+	res = out_of_place_write(fdp, pos, buf, len);
 	if (res != TEE_SUCCESS)
 		goto exit;
 
@@ -511,7 +448,7 @@ exit:
 	return res;
 }
 
-static TEE_Result ree_fs_rename(const char *old, const char *new,
+static TEE_Result ree_fs_rename(struct tee_pobj *old, struct tee_pobj *new,
 				bool overwrite)
 {
 	TEE_Result res;
@@ -523,12 +460,12 @@ static TEE_Result ree_fs_rename(const char *old, const char *new,
 	return res;
 }
 
-static TEE_Result ree_fs_remove(const char *file)
+static TEE_Result ree_fs_remove(struct tee_pobj *po)
 {
 	TEE_Result res;
 
 	mutex_lock(&ree_fs_mutex);
-	res = tee_fs_rpc_remove(OPTEE_MSG_RPC_CMD_FS, file);
+	res = tee_fs_rpc_remove(OPTEE_MSG_RPC_CMD_FS, po);
 	mutex_unlock(&ree_fs_mutex);
 
 	return res;
@@ -552,7 +489,6 @@ const struct tee_file_operations ree_fs_ops = {
 	.close = ree_fs_close,
 	.read = ree_fs_read,
 	.write = ree_fs_write,
-	.seek = ree_fs_seek,
 	.truncate = ree_fs_truncate,
 	.rename = ree_fs_rename,
 	.remove = ree_fs_remove,
