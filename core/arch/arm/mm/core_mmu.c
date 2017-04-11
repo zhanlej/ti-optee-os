@@ -489,7 +489,7 @@ static void init_mem_map(struct tee_mmap_region *memory_map, size_t num_elems)
 	assert(map->type == MEM_AREA_TEE_RAM);
 	map->va = map->pa;
 #ifdef CFG_WITH_PAGER
-	map->region_size = SMALL_PAGE_SIZE,
+	map->region_size = SMALL_PAGE_SIZE;
 #endif
 	map->attr = core_mmu_type_to_attr(map->type);
 
@@ -500,6 +500,7 @@ static void init_mem_map(struct tee_mmap_region *memory_map, size_t num_elems)
 		while (map->type != MEM_AREA_NOTYPE) {
 			map->attr = core_mmu_type_to_attr(map->type);
 			va -= map->size;
+			va = ROUNDDOWN(va, map->region_size);
 			map->va = va;
 			map++;
 		}
@@ -520,6 +521,7 @@ static void init_mem_map(struct tee_mmap_region *memory_map, size_t num_elems)
 		map++;
 		while (map->type != MEM_AREA_NOTYPE) {
 			map->attr = core_mmu_type_to_attr(map->type);
+			va = ROUNDUP(va, map->region_size);
 			map->va = va;
 			va += map->size;
 			map++;

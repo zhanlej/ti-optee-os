@@ -26,10 +26,9 @@
  */
 
 #include <arm32.h>
-#include <asc.h>
 #include <console.h>
 #include <drivers/gic.h>
-#include <drivers/pl011.h>
+#include <drivers/stih_asc.h>
 #include <io.h>
 #include <kernel/generic_boot.h>
 #include <kernel/misc.h>
@@ -50,6 +49,8 @@ register_phys_mem(MEM_AREA_IO_SEC, RNG_BASE, CORE_MMU_DEVICE_SIZE);
 register_phys_mem(MEM_AREA_IO_NSEC, UART_CONSOLE_BASE, CORE_MMU_DEVICE_SIZE);
 
 static struct gic_data gic_data;
+static struct stih_asc_pd console_data __early_bss;
+
 static void main_fiq(void);
 
 #if defined(PLATFORM_FLAVOR_b2260)
@@ -89,35 +90,30 @@ const struct thread_handlers *generic_boot_get_handlers(void)
 	return &handlers;
 }
 
-static vaddr_t console_base(void)
-{
-	static void *va __early_bss;
-
-	if (cpu_mmu_enabled()) {
-		if (!va)
-			va = phys_to_virt(UART_CONSOLE_BASE, MEM_AREA_IO_NSEC);
-		return (vaddr_t)va;
-	}
-	return UART_CONSOLE_BASE;
-}
-
 void console_init(void)
 {
+	stih_asc_init(&console_data, UART_CONSOLE_BASE);
 }
 
 void console_putc(int ch)
 {
+
 	if (ns_resources_ready()) {
+		struct serial_chip *cons = &console_data.chip;
+
 		if (ch == '\n')
-			__asc_xmit_char('\r', console_base());
-		__asc_xmit_char((char)ch, console_base());
+			cons->ops->putc(cons, '\r');
+		cons->ops->putc(cons, ch);
 	}
 }
 
 void console_flush(void)
 {
-	if (ns_resources_ready())
-		__asc_flush(console_base());
+	if (ns_resources_ready()) {
+		struct serial_chip *cons = &console_data.chip;
+
+		cons->ops->flush(cons);
+	}
 }
 
 vaddr_t pl310_base(void)

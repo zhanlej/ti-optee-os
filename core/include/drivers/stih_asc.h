@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014, STMicroelectronics International N.V.
+ * Copyright (c) 2017, Linaro Limited
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -24,14 +24,20 @@
  * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
  * POSSIBILITY OF SUCH DAMAGE.
  */
+#ifndef STIH_ASC_H
+#define STIH_ASC_H
 
-/* Based on GP TEE Internal API Specification Version 0.27 */
-#ifndef TEE_INTERNAL_API_H
-#define TEE_INTERNAL_API_H
+#include <drivers/serial.h>
+#include <types_ext.h>
 
-#include <tee_api.h>
-#include <tee_api_defines.h>
-#include <tee_api_types.h>
-#include <tee_ta_api.h>
+#define STIH_ASC_REG_SIZE	0x1000
 
-#endif
+struct stih_asc_pd {
+	struct io_pa_va base;
+	struct serial_chip chip;
+};
+
+void stih_asc_init(struct stih_asc_pd *pb, vaddr_t base);
+
+#endif /* STIH_ASC_H */
+
