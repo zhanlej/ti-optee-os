@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016, Sequitur Labs Inc. All rights reserved.
+ * Copyright (c) 2017, Texas Instruments
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -18,55 +18,37 @@
  * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
  * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
  * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
- * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+ * SUBSTITUTE GOODS OR SERVICES// LOSS OF USE, DATA, OR PROFITS// OR BUSINESS
  * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
  * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
  * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include <console.h>
-#include <drivers/serial8250_uart.h>
-#include <kernel/generic_boot.h>
-#include <kernel/panic.h>
-#include <kernel/pm_stubs.h>
-#include <mm/core_memprot.h>
-#include <mm/tee_pager.h>
-#include <platform_config.h>
-#include <stdint.h>
-#include <tee/entry_fast.h>
-#include <tee/entry_std.h>
+#include <arm32.h>
+#include <sm/sm.h>
+#include "api_monitor_index_a15.h"
 
-register_phys_mem(MEM_AREA_IO_NSEC,
-		  CONSOLE_UART_BASE, SERIAL8250_UART_REG_SIZE);
-
-static void main_fiq(void)
+bool sm_platform_handler(struct sm_ctx *ctx)
 {
-	panic();
-}
+	if (ctx->nsec.r12 == 0x200)
+		return true;
 
-static const struct thread_handlers handlers = {
-	.std_smc = tee_entry_std,
-	.fast_smc = tee_entry_fast,
-	.nintr = main_fiq,
-	.cpu_on = cpu_on_handler,
-	.cpu_off = pm_do_nothing,
-	.cpu_suspend = pm_do_nothing,
-	.cpu_resume = pm_do_nothing,
-	.system_off = pm_do_nothing,
-	.system_reset = pm_do_nothing,
-};
+	switch (ctx->nsec.r12) {
+	case API_MONITOR_ACTLR_SETREGISTER_INDEX:
+		write_actlr(ctx->nsec.r0);
+		isb();
+		ctx->nsec.r0 = API_HAL_RET_VALUE_OK;
+		break;
+	case API_MONITOR_TIMER_SETCNTFRQ_INDEX:
+		write_cntfrq(ctx->nsec.r0);
+		isb();
+		ctx->nsec.r0 = API_HAL_RET_VALUE_OK;
+		break;
+	default:
+		ctx->nsec.r0 = API_HAL_RET_VALUE_SERVICE_UNKNWON;
+		break;
+	}
 
-static struct serial8250_uart_data console_data __early_bss;
-
-const struct thread_handlers *generic_boot_get_handlers(void)
-{
-	return &handlers;
-}
-
-void console_init(void)
-{
-	serial8250_uart_init(&console_data, CONSOLE_UART_BASE,
-			     CONSOLE_UART_CLK_IN_HZ, CONSOLE_BAUDRATE);
-	register_serial_console(&console_data.chip);
+	return false;
 }

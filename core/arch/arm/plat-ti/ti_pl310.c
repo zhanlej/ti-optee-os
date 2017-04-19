@@ -26,32 +26,36 @@
  */
 
 #include <arm32.h>
-#include <sm/sm.h>
-#include "api_monitor_index.h"
+#include <io.h>
+#include <kernel/generic_boot.h>
+#include <kernel/tz_ssvce_def.h>
+#include <kernel/tz_ssvce_pl310.h>
+#include <mm/core_memprot.h>
+#include <platform_config.h>
 
-#define API_HAL_RET_VALUE_OK 0x00000000
-#define API_HAL_RET_VALUE_SERVICE_UNKNWON 0xFFFFFFFF
+register_phys_mem(MEM_AREA_IO_SEC, PL310_BASE, PL310_SIZE);
 
-bool sm_platform_handler(struct sm_ctx *ctx)
+vaddr_t pl310_base(void)
 {
-	if (ctx->nsec.r12 == 0x200)
-		return true;
+	static void *va __early_bss;
 
-	switch (ctx->nsec.r12) {
-	case API_MONITOR_ACTLR_SETREGISTER_INDEX:
-		write_actlr(ctx->nsec.r0);
-		isb();
-		ctx->nsec.r0 = API_HAL_RET_VALUE_OK;
-		break;
-	case API_MONITOR_TIMER_SETCNTFRQ_INDEX:
-		write_cntfrq(ctx->nsec.r0);
-		isb();
-		ctx->nsec.r0 = API_HAL_RET_VALUE_OK;
-		break;
-	default:
-		ctx->nsec.r0 = API_HAL_RET_VALUE_SERVICE_UNKNWON;
-		break;
+	if (cpu_mmu_enabled()) {
+		if (!va)
+			va = phys_to_virt(PL310_BASE, MEM_AREA_IO_SEC);
+		return (vaddr_t)va;
 	}
 
-	return false;
+	return PL310_BASE;
+}
+
+/* ROM handles initial setup for us */
+void arm_cl2_config(vaddr_t pl310_base)
+{
+	(void)pl310_base;
+}
+
+/* We provide platform services that expect the cache to be disabled on boot */
+void arm_cl2_enable(vaddr_t pl310_base)
+{
+	(void)pl310_base;
 }

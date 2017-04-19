@@ -168,7 +168,6 @@
 #define L1_XLAT_ADDRESS_SHIFT	(L2_XLAT_ADDRESS_SHIFT + \
 				 XLAT_TABLE_ENTRIES_SHIFT)
 
-#define MAX_MMAP_REGIONS	16
 #define NUM_L1_ENTRIES		\
 		(CFG_LPAE_ADDR_SPACE_SIZE >> L1_XLAT_ADDRESS_SHIFT)
 
@@ -402,7 +401,9 @@ static struct tee_mmap_region *init_xlation_table(struct tee_mmap_region *mm,
 		if (desc == UNSET_DESC) {
 			/* Area not covered by a region so need finer table */
 			uint64_t *new_table = xlat_tables[next_xlat++];
+
 			/* Clear table before use */
+			DMSG("xlat used: %d/%d", next_xlat, MAX_XLAT_TABLES);
 			if (next_xlat > MAX_XLAT_TABLES)
 				panic("running out of xlat tables");
 			memset(new_table, 0, XLAT_TABLE_SIZE);

@@ -28,10 +28,13 @@
 #ifndef CORE_MMU_H
 #define CORE_MMU_H
 
+#include <assert.h>
 #include <compiler.h>
 #include <kernel/user_ta.h>
 #include <mm/tee_mmu_types.h>
+#include <platform_config.h>
 #include <types_ext.h>
+#include <util.h>
 
 /* A small page is the smallest unit of memory that can be mapped */
 #define SMALL_PAGE_SHIFT	12
@@ -73,6 +76,14 @@
 #define CORE_MMU_USER_PARAM_SIZE	(1 << CORE_MMU_USER_PARAM_SHIFT)
 #define CORE_MMU_USER_PARAM_MASK	(CORE_MMU_USER_PARAM_SIZE - 1)
 
+#ifndef CFG_TEE_RAM_VA_SIZE
+#define CFG_TEE_RAM_VA_SIZE		CORE_MMU_PGDIR_SIZE
+#endif
+
+#ifndef STACK_ALIGNMENT
+#define STACK_ALIGNMENT			(sizeof(long) * 2)
+#endif
+
 /*
  * Memory area type:
  * MEM_AREA_NOTYPE:   Undefined type. Used as end of table.
@@ -104,6 +115,27 @@ enum teecore_memtypes {
 	MEM_AREA_MAXTYPE
 };
 
+static inline const char *teecore_memtype_name(enum teecore_memtypes type)
+{
+	static const char * const names[] = {
+		[MEM_AREA_NOTYPE] = "NOTYPE",
+		[MEM_AREA_TEE_RAM] = "TEE_RAM",
+		[MEM_AREA_TEE_COHERENT] = "TEE_COHERENT",
+		[MEM_AREA_TA_RAM] = "TA_RAM",
+		[MEM_AREA_NSEC_SHM] = "NSEC_SHM",
+		[MEM_AREA_RAM_NSEC] = "RAM_NSEC",
+		[MEM_AREA_RAM_SEC] = "RAM_SEC",
+		[MEM_AREA_IO_NSEC] = "IO_NSEC",
+		[MEM_AREA_IO_SEC] = "IO_SEC",
+		[MEM_AREA_RES_VASPACE] = "RES_VASPACE",
+		[MEM_AREA_TA_VASPACE] = "TA_VASPACE",
+		[MEM_AREA_SDP_MEM] = "SDP_MEM",
+	};
+
+	COMPILE_TIME_ASSERT(ARRAY_SIZE(names) == MEM_AREA_MAXTYPE);
+	return names[type];
+}
+
 struct core_mmu_phys_mem {
 	const char *name;
 	enum teecore_memtypes type;
@@ -111,18 +143,21 @@ struct core_mmu_phys_mem {
 	size_t size;
 };
 
+#define __register_memory2(_name, _type, _addr, _size, _section, _id) \
+	static const struct core_mmu_phys_mem __phys_mem_ ## _id \
+		__used __section(_section) = \
+		{ .name = _name, .type = _type, .addr = _addr, .size = _size }
+
+#define __register_memory1(name, type, addr, size, section, id) \
+		__register_memory2(name, type, addr, size, #section, id)
+
 #define register_phys_mem(type, addr, size) \
-	static const struct core_mmu_phys_mem __phys_mem_ ## addr \
-		__used __section("phys_mem_map_section") = \
-		{ #addr, (type), (addr), (size) }
+		__register_memory1(#addr, (type), (addr), (size), \
+				   phys_mem_map_section, __COUNTER__)
 
-#define __register_sdp_mem2(pa, sz, id) \
-	static const struct core_mmu_phys_mem __phys_sdp_mem_ ## id \
-		__used __section("phys_sdp_mem_section") = \
-		{ .type = MEM_AREA_SDP_MEM, .addr = (pa), .size = (sz), }
-
-#define __register_sdp_mem1(pa, sz, id)	__register_sdp_mem2(pa, sz, id)
-#define register_sdp_mem(pa, sz)	__register_sdp_mem1(pa, sz, __COUNTER__)
+#define register_sdp_mem(addr, size) \
+		__register_memory1(#addr, MEM_AREA_SDP_MEM, (addr), (size), \
+				   phys_sdp_mem_section, __COUNTER__)
 
 /* Default NSec shared memory allocated from NSec world */
 extern unsigned long default_nsec_shm_paddr;

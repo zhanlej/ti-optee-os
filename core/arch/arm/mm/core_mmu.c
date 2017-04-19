@@ -26,12 +26,6 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-/*
- * This core mmu supports static section mapping (1MByte) and finer mapping
- * with 4k pages.
- *       It should also allow core to map/unmap (and va/pa) at run-time.
- */
-
 #include <arm.h>
 #include <assert.h>
 #include <kernel/generic_boot.h>
@@ -108,27 +102,6 @@ register_sdp_mem(CFG_TEE_SDP_MEM_BASE, CFG_TEE_SDP_MEM_SIZE);
 register_phys_mem(MEM_AREA_TEE_RAM, CFG_TEE_RAM_START, CFG_TEE_RAM_PH_SIZE);
 register_phys_mem(MEM_AREA_TA_RAM, CFG_TA_RAM_START, CFG_TA_RAM_SIZE);
 register_phys_mem(MEM_AREA_NSEC_SHM, CFG_SHMEM_START, CFG_SHMEM_SIZE);
-#ifdef DEVICE0_PA_BASE
-register_phys_mem(DEVICE0_TYPE, DEVICE0_PA_BASE, DEVICE0_SIZE);
-#endif
-#ifdef DEVICE1_PA_BASE
-register_phys_mem(DEVICE1_TYPE, DEVICE1_PA_BASE, DEVICE1_SIZE);
-#endif
-#ifdef DEVICE2_PA_BASE
-register_phys_mem(DEVICE2_TYPE, DEVICE2_PA_BASE, DEVICE2_SIZE);
-#endif
-#ifdef DEVICE3_PA_BASE
-register_phys_mem(DEVICE3_TYPE, DEVICE3_PA_BASE, DEVICE3_SIZE);
-#endif
-#ifdef DEVICE4_PA_BASE
-register_phys_mem(DEVICE4_TYPE, DEVICE4_PA_BASE, DEVICE4_SIZE);
-#endif
-#ifdef DEVICE5_PA_BASE
-register_phys_mem(DEVICE5_TYPE, DEVICE5_PA_BASE, DEVICE5_SIZE);
-#endif
-#ifdef DEVICE6_PA_BASE
-register_phys_mem(DEVICE6_TYPE, DEVICE6_PA_BASE, DEVICE6_SIZE);
-#endif
 
 static bool _pbuf_intersects(struct memaccess_area *a, size_t alen,
 			     paddr_t pa, size_t size)
@@ -338,19 +311,17 @@ static void add_phys_mem(struct tee_mmap_region *memory_map, size_t num_elems,
 	size_t size;
 
 	/*
-	 * When all entries are added we'd like to have it in a sorted
-	 * array first based on memory type and secondly on physical
-	 * address. If some ranges of memory of the same type overlaps of
-	 * are next to each others they are coalesced into one entry. This
-	 * makes it easier later when building the translation tables.
+	 * If some ranges of memory of the same type do overlap
+	 * each others they are coalesced into one entry. To help this
+	 * added entries are sorted by increasing physical.
 	 *
 	 * Note that it's valid to have the same physical memory as several
 	 * different memory types, for instance the same device memory
 	 * mapped as both secure and non-secure. This will probably not
 	 * happen often in practice.
 	 */
-	DMSG("%s %d 0x%08" PRIxPA " size 0x%08zx",
-	     mem->name, mem->type, mem->addr, mem->size);
+	DMSG("%s type %s 0x%08" PRIxPA " size 0x%08zx",
+	     mem->name, teecore_memtype_name(mem->type), mem->addr, mem->size);
 	while (true) {
 		if (n >= (num_elems - 1)) {
 			EMSG("Out of entries (%zu) in memory_map", num_elems);
@@ -360,8 +331,9 @@ static void add_phys_mem(struct tee_mmap_region *memory_map, size_t num_elems,
 			break;
 		pa = memory_map[n].pa;
 		size = memory_map[n].size;
-		if (mem->addr >= pa && mem->addr <= (pa + (size - 1)) &&
-		    mem->type == memory_map[n].type) {
+		if (mem->type == memory_map[n].type &&
+		    ((mem->addr >= pa && mem->addr <= (pa + (size - 1))) ||
+		    (pa >= mem->addr && pa <= (mem->addr + (mem->size - 1))))) {
 			DMSG("Physical mem map overlaps 0x%" PRIxPA, mem->addr);
 			memory_map[n].pa = MIN(pa, mem->addr);
 			memory_map[n].size = MAX(size, mem->size) +
@@ -384,10 +356,11 @@ static void add_phys_mem(struct tee_mmap_region *memory_map, size_t num_elems,
 }
 
 static void add_va_space(struct tee_mmap_region *memory_map, size_t num_elems,
-			 unsigned int type, size_t size, size_t *last) {
+			 enum teecore_memtypes type, size_t size, size_t *last)
+{
 	size_t n = 0;
 
-	DMSG("type %d size 0x%08zx", type, size);
+	DMSG("type %s size 0x%08zx", teecore_memtype_name(type), size);
 	while (true) {
 		if (n >= (num_elems - 1)) {
 			EMSG("Out of entries (%zu) in memory_map", num_elems);
@@ -438,17 +411,90 @@ uint32_t core_mmu_type_to_attr(enum teecore_memtypes t)
 	}
 }
 
+static bool __maybe_unused map_is_tee_ram(const struct tee_mmap_region *mm)
+{
+	return mm->type == MEM_AREA_TEE_RAM;
+}
+
+static bool map_is_flat_mapped(const struct tee_mmap_region *mm)
+{
+	return map_is_tee_ram(mm);
+}
+
+static bool __maybe_unused map_is_secure(const struct tee_mmap_region *mm)
+{
+	return !!(core_mmu_type_to_attr(mm->type) & TEE_MATTR_SECURE);
+}
+
+static bool __maybe_unused map_is_pgdir(const struct tee_mmap_region *mm)
+{
+	return mm->region_size == CORE_MMU_PGDIR_SIZE;
+}
+
+static int cmp_mmap_by_lower_va(const void *a, const void *b)
+{
+	const struct tee_mmap_region *mm_a = a;
+	const struct tee_mmap_region *mm_b = b;
+
+	return mm_a->va - mm_b->va;
+}
+
+static int __maybe_unused cmp_mmap_by_secure_attr(const void *a, const void *b)
+{
+	const struct tee_mmap_region *mm_a = a;
+	const struct tee_mmap_region *mm_b = b;
+
+	/* unmapped areas are special */
+	if (!core_mmu_type_to_attr(mm_a->type) ||
+	    !core_mmu_type_to_attr(mm_b->type))
+		return 0;
+
+	return map_is_secure(mm_b) - map_is_secure(mm_a);
+}
+
+static int cmp_mmap_by_bigger_region_size(const void *a, const void *b)
+{
+	const struct tee_mmap_region *mm_a = a;
+	const struct tee_mmap_region *mm_b = b;
+
+	return mm_b->region_size - mm_a->region_size;
+}
+
+static void dump_mmap_table(struct tee_mmap_region *memory_map)
+{
+	struct tee_mmap_region *map;
+
+	for (map = memory_map; map->type != MEM_AREA_NOTYPE; map++) {
+		vaddr_t __maybe_unused vstart;
+
+		vstart = map->va + ((vaddr_t)map->pa & (map->region_size - 1));
+		DMSG("type %-12s va 0x%08" PRIxVA "..0x%08" PRIxVA
+		     " pa 0x%08" PRIxPA "..0x%08" PRIxPA " size 0x%08zx (%s)",
+		     teecore_memtype_name(map->type), vstart,
+		     vstart + map->size - 1, map->pa,
+		     (paddr_t)(map->pa + map->size - 1), map->size,
+		     map->region_size == SMALL_PAGE_SIZE ? "smallpg" : "pgdir");
+	}
+}
+
 static void init_mem_map(struct tee_mmap_region *memory_map, size_t num_elems)
 {
 	const struct core_mmu_phys_mem *mem;
 	struct tee_mmap_region *map;
 	size_t last = 0;
+	size_t __maybe_unused count = 0;
 	vaddr_t va;
-	size_t n;
+	vaddr_t __maybe_unused va_max;
 
 	for (mem = &__start_phys_mem_map_section;
 	     mem < &__end_phys_mem_map_section; mem++) {
 		struct core_mmu_phys_mem m = *mem;
+
+		if (!m.size)
+			continue;
+
+		/* Only unmapped virtual range may have a null phys addr */
+		assert(m.addr || !core_mmu_type_to_attr(m.type));
 
 		if (m.type == MEM_AREA_IO_NSEC || m.type == MEM_AREA_IO_SEC) {
 			m.addr = ROUNDDOWN(m.addr, CORE_MMU_PGDIR_SIZE);
@@ -478,66 +524,81 @@ static void init_mem_map(struct tee_mmap_region *memory_map, size_t num_elems)
 			map->region_size = SMALL_PAGE_SIZE;
 		else
 			panic("Impossible memory alignment");
+
+#ifdef CFG_WITH_PAGER
+		if (map_is_tee_ram(map))
+			map->region_size = SMALL_PAGE_SIZE;
+#endif
 	}
 
 	/*
-	 * bootcfg_memory_map is sorted in order first by type and last by
-	 * address. This puts TEE_RAM first and TA_RAM second
-	 *
+	 * To ease mapping and lower use of xlat tables, sort mapping
+	 * description moving small-page regions after the pgdir regions.
 	 */
-	map = memory_map;
-	assert(map->type == MEM_AREA_TEE_RAM);
-	map->va = map->pa;
-#ifdef CFG_WITH_PAGER
-	map->region_size = SMALL_PAGE_SIZE;
+	qsort(memory_map, last, sizeof(struct tee_mmap_region),
+		cmp_mmap_by_bigger_region_size);
+
+#if !defined(CFG_WITH_LPAE)
+	/*
+	 * 32bit MMU descriptors cannot mix secure and non-secure mapping in
+	 * the same level2 table. Hence sort secure mapping from non-secure
+	 * mapping.
+	 */
+	for (count = 0, map = memory_map; map_is_pgdir(map); count++, map++)
+		;
+
+	qsort(memory_map + count, last - count, sizeof(struct tee_mmap_region),
+		cmp_mmap_by_secure_attr);
 #endif
-	map->attr = core_mmu_type_to_attr(map->type);
 
+	/*
+	 * Map flat mapped addresses first.
+	 * 'va' will store the lower address of the flat-mapped areas to later
+	 * setup the virtual mapping of the non flat-mapped areas.
+	 */
+	va = (vaddr_t)~0UL;
+	va_max = 0;
+	for (map = memory_map; map->type != MEM_AREA_NOTYPE; map++) {
+		if (!map_is_flat_mapped(map))
+			continue;
 
-	if (core_mmu_place_tee_ram_at_top(map->pa)) {
-		va = map->va;
-		map++;
-		while (map->type != MEM_AREA_NOTYPE) {
+		map->attr = core_mmu_type_to_attr(map->type);
+		map->va = map->pa;
+		va = MIN(va, ROUNDDOWN(map->va, map->region_size));
+		va_max = MAX(va_max, ROUNDUP(va + map->size, map->region_size));
+	}
+	assert(va >= CFG_TEE_RAM_START);
+	assert(va_max <= CFG_TEE_RAM_START + CFG_TEE_RAM_VA_SIZE);
+
+	if (core_mmu_place_tee_ram_at_top(va)) {
+		/* Map non-flat mapped addresses below flat mapped addresses */
+		for (map = memory_map; map->type != MEM_AREA_NOTYPE; map++) {
+			if (map_is_flat_mapped(map))
+				continue;
+
 			map->attr = core_mmu_type_to_attr(map->type);
 			va -= map->size;
 			va = ROUNDDOWN(va, map->region_size);
 			map->va = va;
-			map++;
-		}
-		/*
-		 * The memory map should be sorted by virtual address
-		 * when this function returns. As we're assigning va in
-		 * the oposite direction we need to reverse the list.
-		 */
-		for (n = 0; n < last / 2; n++) {
-			struct tee_mmap_region r;
-
-			r = memory_map[last - n - 1];
-			memory_map[last - n - 1] = memory_map[n];
-			memory_map[n] = r;
 		}
 	} else {
-		va = ROUNDUP(map->va + map->size, CORE_MMU_PGDIR_SIZE);
-		map++;
-		while (map->type != MEM_AREA_NOTYPE) {
+		/* Map non-flat mapped addresses above flat mapped addresses */
+		va = ROUNDUP(va + CFG_TEE_RAM_VA_SIZE, CORE_MMU_PGDIR_SIZE);
+		for (map = memory_map; map->type != MEM_AREA_NOTYPE; map++) {
+			if (map_is_flat_mapped(map))
+				continue;
+
 			map->attr = core_mmu_type_to_attr(map->type);
 			va = ROUNDUP(va, map->region_size);
 			map->va = va;
 			va += map->size;
-			map++;
 		}
 	}
 
-	for (map = memory_map; map->type != MEM_AREA_NOTYPE; map++) {
-		vaddr_t __maybe_unused vstart;
+	qsort(memory_map, last, sizeof(struct tee_mmap_region),
+		cmp_mmap_by_lower_va);
 
-		vstart = map->va + ((vaddr_t)map->pa & (map->region_size - 1));
-		DMSG("type va %d 0x%08" PRIxVA "..0x%08" PRIxVA
-		     " pa 0x%08" PRIxPA "..0x%08" PRIxPA " size %#zx",
-		     map->type, vstart, vstart + map->size - 1,
-		     (paddr_t)map->pa, (paddr_t)map->pa + map->size - 1,
-		     map->size);
-	}
+	dump_mmap_table(memory_map);
 }
 
 /*

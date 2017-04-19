@@ -50,10 +50,15 @@
 static struct gic_data gic_data;
 static struct serial8250_uart_data console_data __early_bss;
 
+register_phys_mem(MEM_AREA_IO_SEC, SECRAM_BASE, SECRAM_SIZE);
 register_phys_mem(MEM_AREA_IO_SEC, GICC_BASE, GICC_SIZE);
 register_phys_mem(MEM_AREA_IO_SEC, GICD_BASE, GICD_SIZE);
 register_phys_mem(MEM_AREA_IO_NSEC, CONSOLE_UART_BASE,
 		  SERIAL8250_UART_REG_SIZE);
+
+register_phys_mem(MEM_AREA_IO_SEC,
+		  ROUNDDOWN(SECRAM_BASE, CORE_MMU_DEVICE_SIZE),
+		  CORE_MMU_DEVICE_SIZE);
 
 void main_init_gic(void)
 {

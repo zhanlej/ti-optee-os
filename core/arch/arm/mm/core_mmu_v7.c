@@ -44,6 +44,16 @@
 #error This file is not to be used with LPAE
 #endif
 
+#ifndef DEBUG_XLAT_TABLE
+#define DEBUG_XLAT_TABLE 0
+#endif
+
+#if DEBUG_XLAT_TABLE
+#define debug_print(...) DMSG_RAW(__VA_ARGS__)
+#else
+#define debug_print(...) ((void)0)
+#endif
+
 /*
  * MMU related values
  */
@@ -69,9 +79,16 @@
 /* Normal memory, Outer Write-Back Write-Allocate Cacheable */
 #define TEE_MMU_TTB_RNG_WBWA    (1 << 3)
 
+/* Normal memory, Outer Write-Back no Write-Allocate Cacheable */
+#define TEE_MMU_TTB_RNG_WB      (3 << 3)
+
+#ifndef CFG_NO_SMP
 #define TEE_MMU_DEFAULT_ATTRS \
 		(TEE_MMU_TTB_S | TEE_MMU_TTB_NOS | \
 		 TEE_MMU_TTB_IRGN_WBWA | TEE_MMU_TTB_RNG_WBWA)
+#else
+#define TEE_MMU_DEFAULT_ATTRS (TEE_MMU_TTB_IRGN_WB | TEE_MMU_TTB_RNG_WB)
+#endif
 
 
 #define INVALID_DESC		0x0
@@ -95,7 +112,7 @@
 					 (((texcb) & 0x1) << 2))
 #define SECTION_DEVICE			SECTION_TEXCB(ATTR_DEVICE_INDEX)
 #define SECTION_NORMAL			SECTION_TEXCB(ATTR_DEVICE_INDEX)
-#define SECTION_NORMAL_CACHED		SECTION_TEXCB(ATTR_IWBWA_OWBWA_INDEX)
+#define SECTION_NORMAL_CACHED		SECTION_TEXCB(ATTR_NORMAL_CACHED_INDEX)
 
 #define SECTION_XN			(1 << 4)
 #define SECTION_PXN			(1 << 0)
@@ -112,7 +129,7 @@
 					 (((texcb) & 0x1) << 2))
 #define SMALL_PAGE_DEVICE		SMALL_PAGE_TEXCB(ATTR_DEVICE_INDEX)
 #define SMALL_PAGE_NORMAL		SMALL_PAGE_TEXCB(ATTR_DEVICE_INDEX)
-#define SMALL_PAGE_NORMAL_CACHED	SMALL_PAGE_TEXCB(ATTR_IWBWA_OWBWA_INDEX)
+#define SMALL_PAGE_NORMAL_CACHED	SMALL_PAGE_TEXCB(ATTR_NORMAL_CACHED_INDEX)
 #define SMALL_PAGE_ACCESS_FLAG		(1 << 4)
 #define SMALL_PAGE_UNPRIV		(1 << 5)
 #define SMALL_PAGE_RO			(1 << 9)
@@ -121,7 +138,7 @@
 
 /* The TEX, C and B bits concatenated */
 #define ATTR_DEVICE_INDEX		0x0
-#define ATTR_IWBWA_OWBWA_INDEX		0x1
+#define ATTR_NORMAL_CACHED_INDEX	0x1
 
 #define PRRR_IDX(idx, tr, nos)		(((tr) << (2 * (idx))) | \
 					 ((uint32_t)(nos) << ((idx) + 24)))
@@ -135,8 +152,13 @@
 #define ATTR_DEVICE_PRRR		PRRR_IDX(ATTR_DEVICE_INDEX, 1, 0)
 #define ATTR_DEVICE_NMRR		NMRR_IDX(ATTR_DEVICE_INDEX, 0, 0)
 
-#define ATTR_IWBWA_OWBWA_PRRR		PRRR_IDX(ATTR_IWBWA_OWBWA_INDEX, 2, 1)
-#define ATTR_IWBWA_OWBWA_NMRR		NMRR_IDX(ATTR_IWBWA_OWBWA_INDEX, 1, 1)
+#ifndef CFG_NO_SMP
+#define ATTR_NORMAL_CACHED_PRRR		PRRR_IDX(ATTR_NORMAL_CACHED_INDEX, 2, 1)
+#define ATTR_NORMAL_CACHED_NMRR		NMRR_IDX(ATTR_NORMAL_CACHED_INDEX, 1, 1)
+#else
+#define ATTR_NORMAL_CACHED_PRRR		PRRR_IDX(ATTR_NORMAL_CACHED_INDEX, 2, 0)
+#define ATTR_NORMAL_CACHED_NMRR		NMRR_IDX(ATTR_NORMAL_CACHED_INDEX, 3, 3)
+#endif
 
 #define NUM_L1_ENTRIES		4096
 #define NUM_L2_ENTRIES		256
@@ -219,6 +241,7 @@ static void *core_mmu_alloc_l2(size_t size)
 	uint32_t to_alloc = ROUNDUP(size, NUM_L2_ENTRIES * SMALL_PAGE_SIZE) /
 		(NUM_L2_ENTRIES * SMALL_PAGE_SIZE);
 
+	DMSG("L2 table used: %d/%d", tables_used + to_alloc, MAX_XLAT_TABLES);
 	if (tables_used + to_alloc > MAX_XLAT_TABLES)
 		return NULL;
 
@@ -253,7 +276,7 @@ static enum desc_type get_desc_type(unsigned level, uint32_t desc)
 static uint32_t texcb_to_mattr(uint32_t texcb)
 {
 	COMPILE_TIME_ASSERT(ATTR_DEVICE_INDEX == TEE_MATTR_CACHE_NONCACHE);
-	COMPILE_TIME_ASSERT(ATTR_IWBWA_OWBWA_INDEX == TEE_MATTR_CACHE_CACHED);
+	COMPILE_TIME_ASSERT(ATTR_NORMAL_CACHED_INDEX == TEE_MATTR_CACHE_CACHED);
 
 	return texcb << TEE_MATTR_CACHE_SHIFT;
 }
@@ -347,7 +370,7 @@ static uint32_t mattr_to_desc(unsigned level, uint32_t attr)
 	}
 
 	if (!(a & TEE_MATTR_VALID_BLOCK))
-		return 0;
+		return INVALID_DESC;
 
 	if (a & (TEE_MATTR_PX | TEE_MATTR_PW))
 		a |= TEE_MATTR_PR;
@@ -362,7 +385,11 @@ static uint32_t mattr_to_desc(unsigned level, uint32_t attr)
 	texcb = mattr_to_texcb(a);
 
 	if (level == 1) {	/* Section */
+#ifndef CFG_NO_SMP
 		desc = SECTION_SECTION | SECTION_SHARED;
+#else
+		desc = SECTION_SECTION;
+#endif
 
 		if (!(a & (TEE_MATTR_PX | TEE_MATTR_UX)))
 			desc |= SECTION_XN;
@@ -389,7 +416,11 @@ static uint32_t mattr_to_desc(unsigned level, uint32_t attr)
 
 		desc |= SECTION_TEXCB(texcb);
 	} else {
+#ifndef CFG_NO_SMP
 		desc = SMALL_PAGE_SMALL_PAGE | SMALL_PAGE_SHARED;
+#else
+		desc = SMALL_PAGE_SMALL_PAGE;
+#endif
 
 		if (!(a & (TEE_MATTR_PX | TEE_MATTR_UX)))
 			desc |= SMALL_PAGE_XN;
@@ -630,9 +661,11 @@ static paddr_t map_page_memarea(struct tee_mmap_region *mm)
 
 	/* Fill in the entries */
 	while ((pg_idx * SMALL_PAGE_SIZE) <
-		(mm->size + (mm->va & SECTION_MASK))) {
-		l2[pg_idx] = ((mm->pa & ~SECTION_MASK) +
-				pg_idx * SMALL_PAGE_SIZE) | attr;
+	       (mm->size + (mm->va & SECTION_MASK))) {
+		l2[pg_idx] = attr;
+		if (attr != INVALID_DESC)
+			l2[pg_idx] |= (mm->pa & ~SECTION_MASK) +
+					pg_idx * SMALL_PAGE_SIZE;
 		pg_idx++;
 	}
 
@@ -684,13 +717,42 @@ static void map_memarea(struct tee_mmap_region *mm, uint32_t *ttb)
 		if ((mm->va | mm->pa | mm->size) & SMALL_PAGE_MASK)
 			panic("memarea can't be mapped");
 
+		if (!(mm->attr & TEE_MATTR_VALID_BLOCK))
+			debug_print("4k page map [%08" PRIxVA " %08" PRIxVA
+				"] not-mapped", mm->va, mm->va + mm->size);
+		else
+			debug_print("4k page map [%08" PRIxVA " %08" PRIxVA
+				"] %s-%s-%s-%s",
+				mm->va, mm->va + mm->size,
+				mm->attr & (TEE_MATTR_CACHE_CACHED <<
+					TEE_MATTR_CACHE_SHIFT) ?
+					"MEM" : "DEV",
+				mm->attr & TEE_MATTR_PW ? "RW" : "RO",
+				mm->attr & TEE_MATTR_PX ? "X" : "XN",
+				mm->attr & TEE_MATTR_SECURE ? "S" : "NS");
+
 		attr = mattr_to_desc(1, mm->attr | TEE_MATTR_TABLE);
 		pa = map_page_memarea(mm);
 	} else {
 		region_size = SECTION_SIZE;
 
 		attr = mattr_to_desc(1, mm->attr);
-		pa = mm->pa;
+		if (attr == INVALID_DESC) {
+			debug_print("section map [%08" PRIxVA " %08" PRIxVA
+				"] not-mapped", mm->va, mm->va + mm->size);
+			pa = 0;
+		} else {
+			debug_print("section map [%08" PRIxVA " %08" PRIxVA
+				"] %s-%s-%s-%s",
+				mm->va, mm->va + mm->size,
+				mm->attr & (TEE_MATTR_CACHE_CACHED <<
+					TEE_MATTR_CACHE_SHIFT) ?
+					"MEM" : "DEV",
+				mm->attr & TEE_MATTR_PW ? "RW" : "RO",
+				mm->attr & TEE_MATTR_PX ? "X" : "XN",
+				mm->attr & TEE_MATTR_SECURE ? "S" : "NS");
+			pa = mm->pa;
+		}
 	}
 
 	m = (mm->va >> SECTION_SHIFT);
@@ -731,8 +793,8 @@ void core_init_mmu_regs(void)
 	/* Enable Access flag (simplified access permissions) and TEX remap */
 	write_sctlr(read_sctlr() | SCTLR_AFE | SCTLR_TRE);
 
-	prrr = ATTR_DEVICE_PRRR | ATTR_IWBWA_OWBWA_PRRR;
-	nmrr = ATTR_DEVICE_NMRR | ATTR_IWBWA_OWBWA_NMRR;
+	prrr = ATTR_DEVICE_PRRR | ATTR_NORMAL_CACHED_PRRR;
+	nmrr = ATTR_DEVICE_NMRR | ATTR_NORMAL_CACHED_NMRR;
 
 	prrr |= PRRR_NS1 | PRRR_DS1;
 
