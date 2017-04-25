@@ -25,28 +25,28 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#ifndef TEE_FS_KEY_MANAGER_H
-#define TEE_FS_KEY_MANAGER_H
+#include <inttypes.h>
+#include <kernel/tee_common_otp.h>
 
-#include <tee_api_types.h>
-#include <utee_defines.h>
+/*
+ * Override these in your platform code to really fetch device-unique
+ * bits from e-fuses or whatever.
+ *
+ * The default implementation just sets it to a constant.
+ */
 
-#define TEE_FS_KM_CHIP_ID_LENGTH    32
-#define TEE_FS_KM_HMAC_ALG          TEE_ALG_HMAC_SHA256
-#define TEE_FS_KM_ENC_FEK_ALG       TEE_ALG_AES_ECB_NOPAD
-#define TEE_FS_KM_SSK_SIZE          TEE_SHA256_HASH_SIZE
-#define TEE_FS_KM_TSK_SIZE          TEE_SHA256_HASH_SIZE
-#define TEE_FS_KM_FEK_SIZE          16  /* bytes */
+__weak void tee_otp_get_hw_unique_key(struct tee_hw_unique_key *hwkey)
+{
+	memset(&hwkey->data[0], 0, sizeof(hwkey->data));
+}
 
-TEE_Result tee_fs_generate_fek(const TEE_UUID *uuid, void *encrypted_fek,
-			       size_t fek_size);
-TEE_Result tee_fs_crypt_block(const TEE_UUID *uuid, uint8_t *out,
-			      const uint8_t *in, size_t size,
-			      uint16_t blk_idx, const uint8_t *encrypted_fek,
-			      TEE_OperationMode mode);
+__weak int tee_otp_get_die_id(uint8_t *buffer, size_t len)
+{
+	static const char pattern[4] = { 'B', 'E', 'E', 'F' };
+	size_t i;
 
-TEE_Result tee_fs_fek_crypt(const TEE_UUID *uuid, TEE_OperationMode mode,
-			    const uint8_t *in_key, size_t size,
-			    uint8_t *out_key);
+	for (i = 0; i < len; i++)
+		buffer[i] = pattern[i % 4];
 
-#endif
+	return 0;
+}

@@ -231,6 +231,7 @@ static void init_runtime(unsigned long pageable_part)
 	malloc_add_pool(__heap2_start, __heap2_end - __heap2_start);
 
 	hashes = malloc(hash_size);
+	IMSG_RAW("\n");
 	IMSG("Pager is enabled. Hashes: %zu bytes", hash_size);
 	assert(hashes);
 	memcpy(hashes, __tmp_hashes_start, hash_size);
@@ -418,6 +419,7 @@ static void init_runtime(unsigned long pageable_part __unused)
 	 * above
 	 */
 	teecore_init_ta_ram();
+	IMSG_RAW("\n");
 }
 #endif
 
@@ -428,7 +430,7 @@ static int add_optee_dt_node(void *fdt)
 	int ret;
 
 	if (fdt_path_offset(fdt, "/firmware/optee") >= 0) {
-		IMSG("OP-TEE Device Tree node already exists!\n");
+		DMSG("OP-TEE Device Tree node already exists!\n");
 		return 0;
 	}
 

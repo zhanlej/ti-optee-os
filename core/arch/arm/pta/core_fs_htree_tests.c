@@ -278,13 +278,21 @@ static TEE_Result htree_test_rewrite(struct test_aux *aux, size_t num_blocks,
 	TEE_Result res;
 	struct tee_fs_htree *ht = NULL;
 	size_t salt = 23;
+	uint8_t hash[TEE_FS_HTREE_HASH_SIZE];
+	const TEE_UUID *uuid;
+	struct tee_ta_session *sess;
 
 	assert((w_unsync_begin + w_unsync_num) <= num_blocks);
+
+	res = tee_ta_get_current_session(&sess);
+	if (res)
+		return res;
+	uuid = &sess->ctx->uuid;
 
 	aux->data_len = 0;
 	memset(aux->data, 0xce, aux->data_alloced);
 
-	res = tee_fs_htree_open(true, &test_htree_ops, aux, &ht);
+	res = tee_fs_htree_open(true, hash, uuid, &test_htree_ops, aux, &ht);
 	CHECK_RES(res, goto out);
 
 	/*
@@ -323,7 +331,7 @@ static TEE_Result htree_test_rewrite(struct test_aux *aux, size_t num_blocks,
 	 * Sync the changes of the nodes to memory, verify that all
 	 * blocks are read back as expected.
 	 */
-	res = tee_fs_htree_sync_to_storage(&ht);
+	res = tee_fs_htree_sync_to_storage(&ht, hash);
 	CHECK_RES(res, goto out);
 
 	res = do_range(read_block, &ht, 0, num_blocks, salt);
@@ -333,7 +341,7 @@ static TEE_Result htree_test_rewrite(struct test_aux *aux, size_t num_blocks,
 	 * Close and reopen the hash-tree
 	 */
 	tee_fs_htree_close(&ht);
-	res = tee_fs_htree_open(false, &test_htree_ops, aux, &ht);
+	res = tee_fs_htree_open(false, hash, uuid, &test_htree_ops, aux, &ht);
 	CHECK_RES(res, goto out);
 
 	/*
@@ -381,7 +389,7 @@ static TEE_Result htree_test_rewrite(struct test_aux *aux, size_t num_blocks,
 	 * and verify that recent changes indeed was discarded.
 	 */
 	tee_fs_htree_close(&ht);
-	res = tee_fs_htree_open(false, &test_htree_ops, aux, &ht);
+	res = tee_fs_htree_open(false, hash, uuid, &test_htree_ops, aux, &ht);
 	CHECK_RES(res, goto out);
 
 	res = do_range(read_block, &ht, 0, num_blocks, salt);
@@ -389,10 +397,11 @@ static TEE_Result htree_test_rewrite(struct test_aux *aux, size_t num_blocks,
 
 	/*
 	 * Close, reopen and verify that all blocks are read as expected
-	 * again.
+	 * again but this time based on the counter value in struct
+	 * tee_fs_htree_image.
 	 */
 	tee_fs_htree_close(&ht);
-	res = tee_fs_htree_open(false, &test_htree_ops, aux, &ht);
+	res = tee_fs_htree_open(false, NULL, uuid, &test_htree_ops, aux, &ht);
 	CHECK_RES(res, goto out);
 
 	res = do_range(read_block, &ht, 0, num_blocks, salt);
