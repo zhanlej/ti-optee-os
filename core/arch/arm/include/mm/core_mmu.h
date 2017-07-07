@@ -59,20 +59,12 @@
 #define CORE_MMU_DEVICE_MASK		(CORE_MMU_DEVICE_SIZE - 1)
 
 /* TA user space code, data, stack and heap are mapped using this granularity */
-#ifdef CFG_SMALL_PAGE_USER_TA
 #define CORE_MMU_USER_CODE_SHIFT	SMALL_PAGE_SHIFT
-#else
-#define CORE_MMU_USER_CODE_SHIFT	CORE_MMU_PGDIR_SHIFT
-#endif
 #define CORE_MMU_USER_CODE_SIZE		(1 << CORE_MMU_USER_CODE_SHIFT)
 #define CORE_MMU_USER_CODE_MASK		(CORE_MMU_USER_CODE_SIZE - 1)
 
 /* TA user space parameters are mapped using this granularity */
-#ifdef CFG_SMALL_PAGE_USER_TA
 #define CORE_MMU_USER_PARAM_SHIFT	SMALL_PAGE_SHIFT
-#else
-#define CORE_MMU_USER_PARAM_SHIFT	CORE_MMU_PGDIR_SHIFT
-#endif
 #define CORE_MMU_USER_PARAM_SIZE	(1 << CORE_MMU_USER_PARAM_SHIFT)
 #define CORE_MMU_USER_PARAM_MASK	(CORE_MMU_USER_PARAM_SIZE - 1)
 
@@ -86,8 +78,11 @@
 
 /*
  * Memory area type:
- * MEM_AREA_NOTYPE:   Undefined type. Used as end of table.
- * MEM_AREA_TEE_RAM:  teecore execution RAM (secure, reserved to TEE, unused)
+ * MEM_AREA_END:      Reserved, marks the end of a table of mapping areas.
+ * MEM_AREA_TEE_RAM:  core RAM (read/write/executable, secure, reserved to TEE)
+ * MEM_AREA_TEE_RAM_RX:  core private read-only/executable memory (secure)
+ * MEM_AREA_TEE_RAM_RO:  core private read-only/non-executable memory (secure)
+ * MEM_AREA_TEE_RAM_RW:  core private read/write/non-executable memory (secure)
  * MEM_AREA_TEE_COHERENT: teecore coherent RAM (secure, reserved to TEE)
  * MEM_AREA_TA_RAM:   Secure RAM where teecore loads/exec TA instances.
  * MEM_AREA_NSEC_SHM: NonSecure shared RAM between NSec and TEE.
@@ -96,12 +91,16 @@
  * MEM_AREA_IO_NSEC:  NonSecure HW mapped registers
  * MEM_AREA_IO_SEC:   Secure HW mapped registers
  * MEM_AREA_RES_VASPACE: Reserved virtual memory space
+ * MEM_AREA_SHM_VASPACE: Virtual memory space for dynamic shared memory buffers
  * MEM_AREA_TA_VASPACE: TA va space, only used with phys_to_virt()
  * MEM_AREA_MAXTYPE:  lower invalid 'type' value
  */
 enum teecore_memtypes {
-	MEM_AREA_NOTYPE = 0,
+	MEM_AREA_END = 0,
 	MEM_AREA_TEE_RAM,
+	MEM_AREA_TEE_RAM_RX,
+	MEM_AREA_TEE_RAM_RO,
+	MEM_AREA_TEE_RAM_RW,
 	MEM_AREA_TEE_COHERENT,
 	MEM_AREA_TA_RAM,
 	MEM_AREA_NSEC_SHM,
@@ -110,6 +109,7 @@ enum teecore_memtypes {
 	MEM_AREA_IO_NSEC,
 	MEM_AREA_IO_SEC,
 	MEM_AREA_RES_VASPACE,
+	MEM_AREA_SHM_VASPACE,
 	MEM_AREA_TA_VASPACE,
 	MEM_AREA_SDP_MEM,
 	MEM_AREA_MAXTYPE
@@ -118,8 +118,11 @@ enum teecore_memtypes {
 static inline const char *teecore_memtype_name(enum teecore_memtypes type)
 {
 	static const char * const names[] = {
-		[MEM_AREA_NOTYPE] = "NOTYPE",
-		[MEM_AREA_TEE_RAM] = "TEE_RAM",
+		[MEM_AREA_END] = "END",
+		[MEM_AREA_TEE_RAM] = "TEE_RAM_RWX",
+		[MEM_AREA_TEE_RAM_RX] = "TEE_RAM_RX",
+		[MEM_AREA_TEE_RAM_RO] = "TEE_RAM_RO",
+		[MEM_AREA_TEE_RAM_RW] = "TEE_RAM_RW",
 		[MEM_AREA_TEE_COHERENT] = "TEE_COHERENT",
 		[MEM_AREA_TA_RAM] = "TA_RAM",
 		[MEM_AREA_NSEC_SHM] = "NSEC_SHM",
@@ -128,6 +131,7 @@ static inline const char *teecore_memtype_name(enum teecore_memtypes type)
 		[MEM_AREA_IO_NSEC] = "IO_NSEC",
 		[MEM_AREA_IO_SEC] = "IO_SEC",
 		[MEM_AREA_RES_VASPACE] = "RES_VASPACE",
+		[MEM_AREA_SHM_VASPACE] = "SHM_VASPACE",
 		[MEM_AREA_TA_VASPACE] = "TA_VASPACE",
 		[MEM_AREA_SDP_MEM] = "SDP_MEM",
 	};
@@ -135,6 +139,12 @@ static inline const char *teecore_memtype_name(enum teecore_memtypes type)
 	COMPILE_TIME_ASSERT(ARRAY_SIZE(names) == MEM_AREA_MAXTYPE);
 	return names[type];
 }
+
+#ifdef CFG_CORE_RWDATA_NOEXEC
+#define MEM_AREA_TEE_RAM_RW_DATA	MEM_AREA_TEE_RAM_RW
+#else
+#define MEM_AREA_TEE_RAM_RW_DATA	MEM_AREA_TEE_RAM
+#endif
 
 struct core_mmu_phys_mem {
 	const char *name;
@@ -158,6 +168,10 @@ struct core_mmu_phys_mem {
 #define register_sdp_mem(addr, size) \
 		__register_memory1(#addr, MEM_AREA_SDP_MEM, (addr), (size), \
 				   phys_sdp_mem_section, __COUNTER__)
+
+#define register_nsec_ddr(addr, size) \
+		__register_memory1(#addr, MEM_AREA_RAM_NSEC, (addr), (size), \
+				   phys_nsec_ddr_section, __COUNTER__)
 
 /* Default NSec shared memory allocated from NSec world */
 extern unsigned long default_nsec_shm_paddr;
@@ -368,6 +382,36 @@ static inline size_t core_mmu_get_block_offset(
 }
 
 /*
+ * core_mmu_is_dynamic_vaspace() - Check if memory region belongs to
+ *  empty virtual address space that is used for dymanic mappings
+ * @mm:		memory region to be checked
+ * @returns result of the check
+ */
+static inline bool core_mmu_is_dynamic_vaspace(struct tee_mmap_region *mm)
+{
+	return mm->type == MEM_AREA_RES_VASPACE ||
+		mm->type == MEM_AREA_SHM_VASPACE;
+}
+
+/*
+ * core_mmu_map_pages() - map list of pages at given virtual address
+ * @vstart:	Virtual address where mapping begins
+ * @pages:	Array of page addresses
+ * @num_pages:	Number of pages
+ * @memtype:	Type of memmory to be mapped
+ * @returns:	TEE_SUCCESS on success, TEE_ERROR_XXX on error
+ */
+TEE_Result core_mmu_map_pages(vaddr_t vstart, paddr_t *pages, size_t num_pages,
+			      enum teecore_memtypes memtype);
+
+/*
+ * core_mmu_unmap_pages() - remove mapping at given virtual address
+ * @vstart:	Virtual address where mapping begins
+ * @num_pages:	Number of pages to unmap
+ */
+void core_mmu_unmap_pages(vaddr_t vstart, size_t num_pages);
+
+/*
  * core_mmu_user_mapping_is_active() - Report if user mapping is active
  * @returns true if a user VA space is active, false if user VA space is
  *          inactive.
@@ -385,11 +429,12 @@ void core_mmu_get_mem_by_type(enum teecore_memtypes type, vaddr_t *s,
 
 enum teecore_memtypes core_mmu_get_type_by_pa(paddr_t pa);
 
-/* Function is deprecated, use virt_to_phys() instead */
-int core_va2pa_helper(void *va, paddr_t *pa);
-
 /* routines to retreive shared mem configuration */
-bool core_mmu_is_shm_cached(void);
+static inline bool core_mmu_is_shm_cached(void)
+{
+	return core_mmu_type_to_attr(MEM_AREA_NSEC_SHM) &
+		(TEE_MATTR_CACHE_CACHED << TEE_MATTR_CACHE_SHIFT);
+}
 
 bool core_mmu_add_mapping(enum teecore_memtypes type, paddr_t addr, size_t len);
 
@@ -401,9 +446,13 @@ enum teecore_tlb_op {
 	TLBINV_BY_MVA,		/* invalidate unified tlb by MVA */
 };
 
-int core_tlb_maintenance(int op, unsigned int a);
+/* TLB invalidation for a range of virtual address */
+void tlbi_mva_range(vaddr_t va, size_t size, size_t granule);
 
-/* Cache maintenance operation type */
+/* deprecated: please call straight tlbi_all() and friends */
+int core_tlb_maintenance(int op, unsigned long a) __deprecated;
+
+/* Cache maintenance operation type (deprecated with core_tlb_maintenance()) */
 enum cache_op {
 	DCACHE_CLEAN,
 	DCACHE_AREA_CLEAN,
@@ -431,6 +480,18 @@ static inline TEE_Result cache_op_outer(enum cache_op op __unused,
 
 /* Check cpu mmu enabled or not */
 bool cpu_mmu_enabled(void);
+
+/*
+ * Check if platform defines nsec DDR range(s).
+ * Static SHM (MEM_AREA_NSEC_SHM) is not covered by this API as it is
+ * always present.
+ */
+bool core_mmu_nsec_ddr_is_defined(void);
+
+#ifdef CFG_DT
+void core_mmu_set_discovered_nsec_ddr(struct core_mmu_phys_mem *start,
+				      size_t nelems);
+#endif
 
 #ifdef CFG_SECURE_DATA_PATH
 /* Alloc and fill SDP memory objects table - table is NULL terminated */
