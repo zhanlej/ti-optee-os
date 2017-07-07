@@ -55,8 +55,6 @@ static const struct tee_file_operations *file_ops(uint32_t storage_id)
 		return &ree_fs_ops;
 #elif defined(CFG_RPMB_FS)
 		return &rpmb_fs_ops;
-#elif defined(CFG_SQL_FS)
-		return &sql_fs_ops;
 #else
 #error At least one filesystem must be enabled.
 #endif
@@ -67,10 +65,6 @@ static const struct tee_file_operations *file_ops(uint32_t storage_id)
 #ifdef CFG_RPMB_FS
 	case TEE_STORAGE_PRIVATE_RPMB:
 		return &rpmb_fs_ops;
-#endif
-#ifdef CFG_SQL_FS
-	case TEE_STORAGE_PRIVATE_SQL:
-		return &sql_fs_ops;
 #endif
 	default:
 		return NULL;
@@ -157,6 +151,7 @@ TEE_Result tee_svc_storage_create_filename(void *buf, size_t blen,
 	return TEE_SUCCESS;
 }
 
+#ifdef CFG_REE_FS
 /* "/dirf.db" or "/<file number>" */
 TEE_Result
 tee_svc_storage_create_filename_dfh(void *buf, size_t blen,
@@ -177,6 +172,7 @@ tee_svc_storage_create_filename_dfh(void *buf, size_t blen,
 	l = blen - pos;
 	return tee_fs_dirfile_fileh_to_fname(dfh, file + pos, &l);
 }
+#endif
 
 /* "/TA_uuid" */
 TEE_Result tee_svc_storage_create_dirname(void *buf, size_t blen,

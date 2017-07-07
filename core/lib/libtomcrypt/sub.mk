@@ -79,7 +79,6 @@ endif
 
 cryp-enable-all-depends = $(call cfg-enable-all-depends,$(strip $(1)),$(foreach v,$(2),CFG_CRYPTO_$(v)))
 $(eval $(call cryp-enable-all-depends,CFG_REE_FS, AES ECB CTR HMAC SHA256 GCM))
-$(eval $(call cryp-enable-all-depends,CFG_SQL_FS, AES ECB CTR HMAC SHA256 GCM))
 $(eval $(call cryp-enable-all-depends,CFG_RPMB_FS, AES ECB CTR HMAC SHA256 GCM))
 
 # Dependency checks: warn and disable some features if dependencies are not met
@@ -121,6 +120,7 @@ _CFG_CRYPTO_WITH_ASN1 := $(call cryp-one-enabled, RSA DSA ECC)
 _CFG_CRYPTO_WITH_FORTUNA_PRNG := $(call cryp-all-enabled, AES SHA256)
 
 cppflags-lib-$(CFG_CRYPTO_SIZE_OPTIMIZATION) += -DLTC_SMALL_CODE
+cppflags-lib-y += -DLTC_RSA_CRT_HARDENING -DLTC_RSA_BLINDING
 cflags-lib-$(CFG_CRYPTO_SIZE_OPTIMIZATION) += -Os
 
 global-incdirs-y += include
