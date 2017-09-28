@@ -32,19 +32,39 @@
 #define STACK_ALIGNMENT		64
 
 /* PL011 UART */
-#if defined(CFG_CONSOLE_UART) && (CFG_CONSOLE_UART == 0)
-#define CONSOLE_UART_BASE       0xF8015000
-#elif !defined(CFG_CONSOLE_UART) || (CFG_CONSOLE_UART == 3)
-#define CONSOLE_UART_BASE       0xF7113000
+#if defined(PLATFORM_FLAVOR_hikey)
+
+#define PL011_UART0_BASE	0xF8015000
+#define PL011_UART3_BASE	0xF7113000
+#if (CFG_CONSOLE_UART == 3)
+#define CONSOLE_UART_BASE	PL011_UART3_BASE
+#elif (CFG_CONSOLE_UART == 0)
+#define CONSOLE_UART_BASE	PL011_UART0_BASE
 #else
 #error Unknown console UART
 #endif
+
+#elif defined(PLATFORM_FLAVOR_hikey960)
+
+#define PL011_UART5_BASE	0xFDF05000
+#define PL011_UART6_BASE	0xFFF32000
+#if (CFG_CONSOLE_UART == 6)
+#define CONSOLE_UART_BASE	PL011_UART6_BASE
+#elif (CFG_CONSOLE_UART == 5)
+#define CONSOLE_UART_BASE	PL011_UART5_BASE
+#else
+#error Unknown console UART
+#endif
+
+#else /* PLATFORM_FLAVOR_hikey */
+#error Unknown console UART
+#endif /* PLATFORM_FLAVOR_hikey */
 
 #define CONSOLE_BAUDRATE	115200
 #define CONSOLE_UART_CLK_IN_HZ	19200000
 
 /*
- * HiKey memory map
+ * HiKey and HiKey960 memory map
  *
  * TZDRAM is secured (firewalled) by the DDR controller, see ARM-TF, but note
  * that security of this type of memory is weak for two reasons:
@@ -54,16 +74,18 @@
  *      code similar to the one that sets the protection in ARM-TF (we're
  *      missing a "lockdown" step which would prevent any change to the DDRC
  *      configuration until the next SoC reset).
- * TZSRAM is emulated in the TZDRAM area, because the on-chip SRAM of the SoC
- * is too small to run OP-TEE (72K total with 64K available, see "SRAM Memory
- * Region Layout" in ARM-TF plat/hikey/include/hisi_sram_map.h).
+ * TZSRAM is emulated in the TZDRAM area, because the on-chip SRAM of the
+ * HiKey SoC is too small to run OP-TEE (72K total with 64K available, see
+ * "SRAM Memory Region Layout" in ARM-TF plat/hikey/include/hisi_sram_map.h),
+ * while the SRAM of the HiKey960 SoC is not available to the public at the
+ * moment.
  *
  * CFG_WITH_PAGER=n
  *
  *  0x4000_0000                               -
- *    TA RAM: 15 MiB                          |
- *  0x3F10_0000                               | TZDRAM
- *    TEE RAM: 1 MiB (CFG_TEE_RAM_VA_SIZE)    |
+ *    TA RAM: 14 MiB                          |
+ *  0x3F20_0000                               | TZDRAM
+ *    TEE RAM: 2 MiB (CFG_TEE_RAM_VA_SIZE)    |
  *  0x3F00_0000 [TZDRAM_BASE, BL32_LOAD_ADDR] -
  *    Shared memory: 2 MiB                    |
  *  0x3EE0_0000                               | DRAM0
@@ -79,8 +101,8 @@
  * CFG_WITH_PAGER=y
  *
  *  0x4000_0000                               -
- *    TA RAM: 15 MiB                          | TZDRAM
- *  0x3F10_0000                               -
+ *    TA RAM: 14 MiB                          | TZDRAM
+ *  0x3F20_0000                               -
  *    Unused
  *  0x3F03_2000                               -
  *    TEE RAM: 200 KiB                        | TZSRAM
@@ -105,8 +127,8 @@
 #define TZSRAM_BASE		0x3F000000
 #define TZSRAM_SIZE		CFG_CORE_TZSRAM_EMUL_SIZE
 
-#define TZDRAM_BASE		0x3F100000
-#define TZDRAM_SIZE		(15 * 1024 * 1024)
+#define TZDRAM_BASE		0x3F200000
+#define TZDRAM_SIZE		(14 * 1024 * 1024)
 
 #else /* CFG_WITH_PAGER */
 
@@ -120,7 +142,7 @@
 
 #define CFG_TEE_CORE_NB_CORE	8
 
-#define CFG_TEE_RAM_VA_SIZE	(1024 * 1024)
+#define CFG_TEE_RAM_VA_SIZE	(2 * 1024 * 1024)
 
 #define CFG_TEE_LOAD_ADDR	0x3F000000
 

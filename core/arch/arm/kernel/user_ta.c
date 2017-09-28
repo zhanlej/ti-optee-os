@@ -43,6 +43,7 @@
 #include <optee_msg_supplicant.h>
 #include <signed_hdr.h>
 #include <stdlib.h>
+#include <sys/queue.h>
 #include <ta_pub_key.h>
 #include <tee/tee_cryp_provider.h>
 #include <tee/tee_cryp_utl.h>
@@ -500,6 +501,7 @@ static void user_ta_enter_close_session(struct tee_ta_session *s)
 static void user_ta_dump_state(struct tee_ta_ctx *ctx)
 {
 	struct user_ta_ctx *utc __maybe_unused = to_user_ta_ctx(ctx);
+	char flags[4] = { '\0', };
 	size_t n;
 
 	EMSG_RAW(" arch: %s  load address: 0x%x  ctx-idr: %d",
@@ -514,10 +516,12 @@ static void user_ta_dump_state(struct tee_ta_ctx *ctx)
 			mobj_get_pa(utc->mmu->regions[n].mobj,
 				    utc->mmu->regions[n].offset, 0, &pa);
 
+		mattr_uflags_to_str(flags, sizeof(flags),
+				    utc->mmu->regions[n].attr);
 		EMSG_RAW(" region %zu: va %#" PRIxVA " pa %#" PRIxPA
-			 " size %#zx",
+			 " size %#zx flags %s",
 			 n, utc->mmu->regions[n].va, pa,
-			 utc->mmu->regions[n].size);
+			 utc->mmu->regions[n].size, flags);
 	}
 }
 KEEP_PAGER(user_ta_dump_state);
@@ -591,25 +595,52 @@ static const struct tee_ta_ops user_ta_ops __rodata_unpaged = {
 	.get_instance_id = user_ta_get_instance_id,
 };
 
-static const struct user_ta_store_ops *user_ta_store;
+static SLIST_HEAD(uta_stores_head, user_ta_store_ops) uta_store_list =
+		SLIST_HEAD_INITIALIZER(uta_stores_head);
 
-TEE_Result tee_ta_register_ta_store(const struct user_ta_store_ops *ops)
+TEE_Result tee_ta_register_ta_store(struct user_ta_store_ops *ops)
 {
-	user_ta_store = ops;
+	struct user_ta_store_ops *p = NULL;
+	struct user_ta_store_ops *e;
+
+	DMSG("Registering TA store: '%s' (priority %d)", ops->description,
+	     ops->priority);
+
+	SLIST_FOREACH(e, &uta_store_list, link) {
+		/*
+		 * Do not allow equal priorities to avoid any dependency on
+		 * registration order.
+		 */
+		assert(e->priority != ops->priority);
+		if (e->priority > ops->priority)
+			break;
+		p = e;
+	}
+	if (p)
+		SLIST_INSERT_AFTER(p, ops, link);
+	else
+		SLIST_INSERT_HEAD(&uta_store_list, ops, link);
+
 	return TEE_SUCCESS;
 }
 
 TEE_Result tee_ta_init_user_ta_session(const TEE_UUID *uuid,
 			struct tee_ta_session *s)
 {
+	const struct user_ta_store_ops *store;
 	TEE_Result res;
 
-	if (!user_ta_store)
-		return TEE_ERROR_ITEM_NOT_FOUND;
-
-	DMSG("Load user TA %pUl", (void *)uuid);
-	res = ta_load(uuid, user_ta_store, &s->ctx);
-	if (res == TEE_SUCCESS)
-		s->ctx->ops = &user_ta_ops;
-	return res;
+	SLIST_FOREACH(store, &uta_store_list, link) {
+		DMSG("Lookup user TA %pUl (%s)", (void *)uuid,
+		     store->description);
+		res = ta_load(uuid, store, &s->ctx);
+		if (res == TEE_ERROR_ITEM_NOT_FOUND)
+			continue;
+		if (res == TEE_SUCCESS)
+			s->ctx->ops = &user_ta_ops;
+		else
+			DMSG("res=0x%x", res);
+		return res;
+	}
+	return TEE_ERROR_ITEM_NOT_FOUND;
 }

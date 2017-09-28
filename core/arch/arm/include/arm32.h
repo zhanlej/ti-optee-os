@@ -33,6 +33,12 @@
 #include <stdint.h>
 #include <util.h>
 
+#define CORTEX_A7_PART_NUM		0xC07
+#define CORTEX_A9_PART_NUM		0xC09
+
+#define MIDR_PRIMARY_PART_NUM_SHIFT	4
+#define MIDR_PRIMARY_PART_NUM_WIDTH	12
+
 #define CPSR_MODE_MASK	ARM32_CPSR_MODE_MASK
 #define CPSR_MODE_USR	ARM32_CPSR_MODE_USR
 #define CPSR_MODE_FIQ	ARM32_CPSR_MODE_FIQ
@@ -577,6 +583,19 @@ static inline uint32_t read_cntfrq(void)
 static inline void write_cntfrq(uint32_t frq)
 {
 	asm volatile("mcr p15, 0, %0, c14, c0, 0" : : "r" (frq));
+}
+
+static inline uint32_t read_cntkctl(void)
+{
+	uint32_t cntkctl;
+
+	asm volatile("mrc p15, 0, %0, c14, c1, 0" : "=r" (cntkctl));
+	return cntkctl;
+}
+
+static inline void write_cntkctl(uint32_t cntkctl)
+{
+	asm volatile("mcr p15, 0, %0, c14, c1, 0" : : "r" (cntkctl));
 }
 
 static __always_inline uint32_t read_pc(void)

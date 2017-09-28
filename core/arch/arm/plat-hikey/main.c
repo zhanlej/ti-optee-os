@@ -31,7 +31,9 @@
 #include <drivers/pl022_spi.h>
 #include <drivers/pl061_gpio.h>
 #endif
+#if defined(PLATFORM_FLAVOR_hikey)
 #include <hikey_peripherals.h>
+#endif
 #include <initcall.h>
 #include <io.h>
 #include <kernel/generic_boot.h>
@@ -61,8 +63,10 @@ static const struct thread_handlers handlers = {
 static struct pl011_data console_data;
 
 register_phys_mem(MEM_AREA_IO_NSEC, CONSOLE_UART_BASE, PL011_REG_SIZE);
+#if defined(PLATFORM_FLAVOR_hikey)
 register_phys_mem(MEM_AREA_IO_NSEC, PMUSSI_BASE, PMUSSI_REG_SIZE);
-#ifdef CFG_SPI
+#endif
+#if defined(CFG_SPI) && defined(PLATFORM_FLAVOR_hikey)
 register_phys_mem(MEM_AREA_IO_NSEC, PERI_BASE, PERI_BASE_REG_SIZE);
 register_phys_mem(MEM_AREA_IO_NSEC, PMX0_BASE, PMX0_REG_SIZE);
 register_phys_mem(MEM_AREA_IO_NSEC, PMX1_BASE, PMX1_REG_SIZE);
@@ -87,20 +91,14 @@ void console_init(void)
 	register_serial_console(&console_data.chip);
 }
 
-vaddr_t nsec_periph_base(paddr_t pa)
-{
-	if (cpu_mmu_enabled())
-		return (vaddr_t)phys_to_virt(pa, MEM_AREA_IO_NSEC);
-	return (vaddr_t)pa;
-}
-
+#if defined(PLATFORM_FLAVOR_hikey)
 #ifdef CFG_SPI
 void spi_init(void)
 {
 	uint32_t shifted_val, read_val;
-	vaddr_t peri_base = nsec_periph_base(PERI_BASE);
-	vaddr_t pmx0_base = nsec_periph_base(PMX0_BASE);
-	vaddr_t pmx1_base = nsec_periph_base(PMX1_BASE);
+	vaddr_t peri_base = core_mmu_get_va(PERI_BASE, MEM_AREA_IO_NSEC);
+	vaddr_t pmx0_base = core_mmu_get_va(PMX0_BASE, MEM_AREA_IO_NSEC);
+	vaddr_t pmx1_base = core_mmu_get_va(PMX1_BASE, MEM_AREA_IO_NSEC);
 
 	DMSG("take SPI0 out of reset\n");
 	shifted_val = PERI_RST3_SSP;
@@ -163,7 +161,7 @@ void spi_init(void)
 
 static TEE_Result peripherals_init(void)
 {
-	vaddr_t pmussi_base = nsec_periph_base(PMUSSI_BASE);
+	vaddr_t pmussi_base = core_mmu_get_va(PMUSSI_BASE, MEM_AREA_IO_NSEC);
 
 	DMSG("enable LD021_1V8 source (pin 35) on LS connector\n");
 	/*
@@ -183,3 +181,4 @@ static TEE_Result peripherals_init(void)
 }
 
 driver_init(peripherals_init);
+#endif /* PLATFORM_FLAVOR_hikey */

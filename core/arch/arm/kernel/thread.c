@@ -89,7 +89,7 @@
 
 struct thread_ctx threads[CFG_NUM_THREADS];
 
-static struct thread_core_local thread_core_local[CFG_TEE_CORE_NB_CORE];
+struct thread_core_local thread_core_local[CFG_TEE_CORE_NB_CORE];
 
 #ifdef CFG_WITH_STACK_CANARIES
 #ifdef ARM32
@@ -642,6 +642,35 @@ size_t thread_stack_size(void)
 	return STACK_THREAD_SIZE;
 }
 
+bool thread_is_from_abort_mode(void)
+{
+	struct thread_core_local *l = thread_get_core_local();
+
+	return (l->flags >> THREAD_CLF_SAVED_SHIFT) & THREAD_CLF_ABORT;
+}
+
+#ifdef ARM32
+bool thread_is_in_normal_mode(void)
+{
+	return (read_cpsr() & ARM32_CPSR_MODE_MASK) == ARM32_CPSR_MODE_SVC;
+}
+#endif
+
+#ifdef ARM64
+bool thread_is_in_normal_mode(void)
+{
+	uint32_t exceptions = thread_mask_exceptions(THREAD_EXCP_FOREIGN_INTR);
+	struct thread_core_local *l = thread_get_core_local();
+	bool ret;
+
+	/* If any bit in l->flags is set we're handling some exception. */
+	ret = !l->flags;
+	thread_unmask_exceptions(exceptions);
+
+	return ret;
+}
+#endif
+
 void thread_state_free(void)
 {
 	struct thread_core_local *l = thread_get_core_local();
@@ -739,9 +768,11 @@ static void set_tmp_stack(struct thread_core_local *l, vaddr_t sp)
 	thread_set_fiq_sp(sp);
 }
 
-static void set_abt_stack(struct thread_core_local *l __unused, vaddr_t sp)
+static void set_abt_stack(struct thread_core_local *l, vaddr_t sp)
 {
-	thread_set_abt_sp(sp);
+	l->abt_stack_va_end = sp;
+	thread_set_abt_sp((vaddr_t)l);
+	thread_set_und_sp((vaddr_t)l);
 }
 #endif /*ARM32*/
 

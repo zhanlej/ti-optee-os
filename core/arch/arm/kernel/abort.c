@@ -79,12 +79,23 @@ static void __print_stack_unwind_arm32(struct abort_info *ai)
 	struct unwind_state_arm32 state;
 	uaddr_t exidx;
 	size_t exidx_sz;
+	uint32_t mode = ai->regs->spsr & CPSR_MODE_MASK;
+	uint32_t sp;
+	uint32_t lr;
 
 	if (abort_is_user_exception(ai)) {
 		get_current_ta_exidx(&exidx, &exidx_sz);
 	} else {
 		exidx = (vaddr_t)__exidx_start;
 		exidx_sz = (vaddr_t)__exidx_end - (vaddr_t)__exidx_start;
+	}
+
+	if (mode == CPSR_MODE_USR || mode == CPSR_MODE_SYS) {
+		sp = ai->regs->usr_sp;
+		lr = ai->regs->usr_lr;
+	} else {
+		sp = read_mode_sp(mode);
+		lr = read_mode_lr(mode);
 	}
 
 	memset(&state, 0, sizeof(state));
@@ -100,15 +111,11 @@ static void __print_stack_unwind_arm32(struct abort_info *ai)
 	state.registers[9] = ai->regs->r9;
 	state.registers[10] = ai->regs->r10;
 	state.registers[11] = ai->regs->r11;
-
-	state.registers[13] = read_mode_sp(ai->regs->spsr & CPSR_MODE_MASK);
-	state.registers[14] = read_mode_lr(ai->regs->spsr & CPSR_MODE_MASK);
+	state.registers[13] = sp;
+	state.registers[14] = lr;
 	state.registers[15] = ai->pc;
 
-	EMSG_RAW("Call stack:");
-	do {
-		EMSG_RAW(" 0x%08x", state.registers[15]);
-	} while (exidx && unwind_stack_arm32(&state, exidx, exidx_sz));
+	print_stack_arm32(TRACE_ERROR, &state, exidx, exidx_sz);
 }
 #else /* ARM32 */
 
@@ -141,10 +148,7 @@ static void __print_stack_unwind_arm32(struct abort_info *ai __unused)
 	state.registers[14] = ai->regs->x14;
 	state.registers[15] = ai->pc;
 
-	EMSG_RAW("Call stack:");
-	do {
-		EMSG_RAW(" 0x%08x", state.registers[15]);
-	} while (exidx && unwind_stack_arm32(&state, exidx, exidx_sz));
+	print_stack_arm32(TRACE_ERROR, &state, exidx, exidx_sz);
 }
 #endif /* ARM32 */
 #ifdef ARM64
@@ -176,10 +180,7 @@ static void __print_stack_unwind_arm64(struct abort_info *ai)
 	state.pc = ai->regs->elr;
 	state.fp = ai->regs->x29;
 
-	EMSG_RAW("Call stack:");
-	do {
-		EMSG_RAW(" 0x%016" PRIx64, state.pc);
-	} while (stack && unwind_stack_arm64(&state, stack, stack_size));
+	print_stack_arm64(TRACE_ERROR, &state, stack, stack_size);
 }
 #else
 static void __print_stack_unwind_arm64(struct abort_info *ai __unused)
@@ -227,10 +228,24 @@ static __maybe_unused const char *fault_to_str(uint32_t abort_type,
 	}
 }
 
-static __maybe_unused void __print_abort_info(
-				struct abort_info *ai __maybe_unused,
-				const char *ctx __maybe_unused)
+static __maybe_unused void
+__print_abort_info(struct abort_info *ai __maybe_unused,
+		   const char *ctx __maybe_unused)
 {
+#ifdef ARM32
+	uint32_t mode = ai->regs->spsr & CPSR_MODE_MASK;
+	__maybe_unused uint32_t sp;
+	__maybe_unused uint32_t lr;
+
+	if (mode == CPSR_MODE_USR || mode == CPSR_MODE_SYS) {
+		sp = ai->regs->usr_sp;
+		lr = ai->regs->usr_lr;
+	} else {
+		sp = read_mode_sp(mode);
+		lr = read_mode_lr(mode);
+	}
+#endif /*ARM32*/
+
 	EMSG_RAW("");
 	EMSG_RAW("%s %s-abort at address 0x%" PRIxVA "%s",
 		ctx, abort_type_to_str(ai->abort_type), ai->va,
@@ -244,11 +259,9 @@ static __maybe_unused void __print_abort_info(
 	EMSG_RAW(" r0 0x%08x      r4 0x%08x    r8 0x%08x   r12 0x%08x",
 		 ai->regs->r0, ai->regs->r4, ai->regs->r8, ai->regs->ip);
 	EMSG_RAW(" r1 0x%08x      r5 0x%08x    r9 0x%08x    sp 0x%08x",
-		 ai->regs->r1, ai->regs->r5, ai->regs->r9,
-		 read_mode_sp(ai->regs->spsr & CPSR_MODE_MASK));
+		 ai->regs->r1, ai->regs->r5, ai->regs->r9, sp);
 	EMSG_RAW(" r2 0x%08x      r6 0x%08x   r10 0x%08x    lr 0x%08x",
-		 ai->regs->r2, ai->regs->r6, ai->regs->r10,
-		 read_mode_lr(ai->regs->spsr & CPSR_MODE_MASK));
+		 ai->regs->r2, ai->regs->r6, ai->regs->r10, lr);
 	EMSG_RAW(" r3 0x%08x      r7 0x%08x   r11 0x%08x    pc 0x%08x",
 		 ai->regs->r3, ai->regs->r7, ai->regs->r11, ai->pc);
 #endif /*ARM32*/
@@ -417,11 +430,9 @@ static void handle_user_ta_panic(struct abort_info *ai)
 	ai->regs->r1 = true;
 	ai->regs->r2 = 0xdeadbeef;
 	ai->regs->elr = (uint32_t)thread_unwind_user_mode;
-	ai->regs->spsr = read_cpsr();
+	ai->regs->spsr &= CPSR_FIA;
 	ai->regs->spsr &= ~CPSR_MODE_MASK;
 	ai->regs->spsr |= CPSR_MODE_SVC;
-	ai->regs->spsr &= ~CPSR_FIA;
-	ai->regs->spsr |= read_spsr() & CPSR_FIA;
 	/* Select Thumb or ARM mode */
 	if (ai->regs->elr & 1)
 		ai->regs->spsr |= CPSR_T;
@@ -492,23 +503,6 @@ bool abort_is_user_exception(struct abort_info *ai __unused)
 	return false;
 }
 #endif /*CFG_WITH_USER_TA*/
-
-#ifdef ARM32
-/* Returns true if the exception originated from abort mode */
-static bool is_abort_in_abort_handler(struct abort_info *ai)
-{
-	return (ai->regs->spsr & ARM32_CPSR_MODE_MASK) == ARM32_CPSR_MODE_ABT;
-}
-#endif /*ARM32*/
-
-#ifdef ARM64
-/* Returns true if the exception originated from abort mode */
-static bool is_abort_in_abort_handler(struct abort_info *ai __unused)
-{
-	return false;
-}
-#endif /*ARM64*/
-
 
 #if defined(CFG_WITH_VFP) && defined(CFG_WITH_USER_TA)
 #ifdef ARM32
@@ -609,7 +603,7 @@ static enum fault_type get_fault_type(struct abort_info *ai)
 #endif
 	}
 
-	if (is_abort_in_abort_handler(ai)) {
+	if (thread_is_from_abort_mode()) {
 		abort_print_error(ai);
 		panic("[abort] abort in abort handler (trap CPU)");
 	}

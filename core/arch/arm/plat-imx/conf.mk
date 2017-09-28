@@ -68,6 +68,7 @@ $(call force,CFG_SECURE_TIME_SOURCE_REE,y)
 
 CFG_BOOT_SYNC_CPU ?= y
 CFG_BOOT_SECONDARY_REQUEST ?= y
+CFG_ENABLE_SCTLR_RR ?= y
 endif
 
 ifeq ($(filter y, $(CFG_MX7)), y)
@@ -75,6 +76,10 @@ include core/arch/arm/cpu/cortex-a7.mk
 
 $(call force,CFG_SECURE_TIME_SOURCE_REE,y)
 CFG_BOOT_SECONDARY_REQUEST ?= y
+endif
+
+ifeq ($(filter y, $(CFG_PSCI_ARM32)), y)
+CFG_HWSUPP_MEM_PERM_WXN = n
 endif
 
 ta-targets = ta_arm32

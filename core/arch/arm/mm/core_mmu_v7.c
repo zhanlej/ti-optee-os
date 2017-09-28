@@ -655,7 +655,13 @@ void core_mmu_set_user_map(struct core_mmu_user_map *map)
 
 bool core_mmu_user_mapping_is_active(void)
 {
-	return read_ttbr0() != read_ttbr1();
+	bool ret;
+	uint32_t exceptions = thread_mask_exceptions(THREAD_EXCP_ALL);
+
+	ret = read_ttbr0() != read_ttbr1();
+	thread_unmask_exceptions(exceptions);
+
+	return ret;
 }
 
 static void print_mmap_area(const struct tee_mmap_region *mm __maybe_unused,
@@ -724,10 +730,8 @@ static void map_page_memarea_in_pgdirs(const struct tee_mmap_region *mm,
 
 	print_mmap_area(mm, "4k page map");
 
-	if (mm->attr & TEE_MATTR_VALID_BLOCK) {
-		attr = mattr_to_desc(1, mm->attr | TEE_MATTR_TABLE);
-		pa = map_page_memarea(mm, ttb[idx]);
-	}
+	attr = mattr_to_desc(1, mm->attr | TEE_MATTR_TABLE);
+	pa = map_page_memarea(mm, ttb[idx]);
 
 	n = ROUNDUP(mm->size, SECTION_SIZE) >> SECTION_SHIFT;
 	while (n--) {
@@ -738,8 +742,7 @@ static void map_page_memarea_in_pgdirs(const struct tee_mmap_region *mm,
 	}
 }
 
-static void map_memarea_sections(const struct tee_mmap_region *mm,
-				 uint32_t *ttb)
+void map_memarea_sections(const struct tee_mmap_region *mm, uint32_t *ttb)
 {
 	uint32_t attr = mattr_to_desc(1, mm->attr);
 	size_t idx = mm->va >> SECTION_SHIFT;
@@ -785,11 +788,11 @@ static void map_memarea(const struct tee_mmap_region *mm, uint32_t *ttb)
 	if (mm->va < (NUM_UL1_ENTRIES * SECTION_SIZE))
 		panic("va conflicts with user ta address");
 
-	if (!((mm->va | mm->pa | mm->size) & SECTION_MASK)) {
+	if (!((mm->va | mm->pa | mm->size | mm->region_size) & SECTION_MASK)) {
 		map_memarea_sections(mm, ttb);
 		return;
 	}
-	if ((mm->va | mm->pa | mm->size) & SMALL_PAGE_MASK)
+	if ((mm->va | mm->pa | mm->size | mm->region_size) & SMALL_PAGE_MASK)
 		panic("memarea can't be mapped");
 
 	mm2 = *mm;
