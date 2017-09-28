@@ -43,6 +43,7 @@
 #include <mm/tee_mm.h>
 #include <mm/tee_mmu.h>
 #include <mm/tee_pager.h>
+#include <sm/psci.h>
 #include <sm/tee_mon.h>
 #include <stdio.h>
 #include <tee/tee_cryp_provider.h>
@@ -179,22 +180,6 @@ static void init_vfp_sec(void)
 #endif
 
 #ifdef CFG_WITH_PAGER
-
-static size_t get_block_size(void)
-{
-	struct core_mmu_table_info tbl_info;
-	unsigned l;
-
-	if (!core_mmu_find_table(CFG_TEE_RAM_START, UINT_MAX, &tbl_info))
-		panic("can't find mmu tables");
-
-	l = tbl_info.level - 1;
-	if (!core_mmu_find_table(CFG_TEE_RAM_START, l, &tbl_info))
-		panic("can't find mmu table upper level");
-
-	return 1 << tbl_info.shift;
-}
-
 static void init_runtime(unsigned long pageable_part)
 {
 	size_t n;
@@ -205,7 +190,6 @@ static void init_runtime(unsigned long pageable_part)
 	tee_mm_entry_t *mm;
 	uint8_t *paged_store;
 	uint8_t *hashes;
-	size_t block_size;
 
 	assert(pageable_size % SMALL_PAGE_SIZE == 0);
 	assert(hash_size == (size_t)__tmp_hashes_size);
@@ -214,12 +198,7 @@ static void init_runtime(unsigned long pageable_part)
 	 * This needs to be initialized early to support address lookup
 	 * in MEM_AREA_TEE_RAM
 	 */
-	if (!core_mmu_find_table(CFG_TEE_RAM_START, UINT_MAX,
-				 &tee_pager_tbl_info))
-		panic("can't find mmu tables");
-
-	if (tee_pager_tbl_info.shift != SMALL_PAGE_SHIFT)
-		panic("Unsupported page size in translation table");
+	tee_pager_early_init();
 
 	thread_init_boot_thread();
 
@@ -241,13 +220,17 @@ static void init_runtime(unsigned long pageable_part)
 	mm = tee_mm_alloc(&tee_mm_sec_ddr, pageable_size);
 	assert(mm);
 	paged_store = phys_to_virt(tee_mm_get_smem(mm), MEM_AREA_TA_RAM);
-	/* Copy init part into pageable area */
-	memcpy(paged_store, __init_start, init_size);
-	/* Copy pageable part after init part into pageable area */
-	memcpy(paged_store + init_size,
-	       phys_to_virt(pageable_part,
-			    core_mmu_get_type_by_pa(pageable_part)),
+	/*
+	 * Load pageable part in the dedicated allocated area:
+	 * - Move pageable non-init part into pageable area. Note bootloader
+	 *   may have loaded it anywhere in TA RAM hence use memmove().
+	 * - Copy pageable init part from current location into pageable area.
+	 */
+	memmove(paged_store + init_size,
+		phys_to_virt(pageable_part,
+			     core_mmu_get_type_by_pa(pageable_part)),
 		__pageable_part_end - __pageable_part_start);
+	memcpy(paged_store, __init_start, init_size);
 
 	/* Check that hashes of what's in pageable area is OK */
 	DMSG("Checking hashes of pageable area");
@@ -275,12 +258,9 @@ static void init_runtime(unsigned long pageable_part)
 	 * Initialize the virtual memory pool used for main_mmu_l2_ttb which
 	 * is supplied to tee_pager_init() below.
 	 */
-	block_size = get_block_size();
-	if (!tee_mm_init(&tee_mm_vcore,
-			ROUNDDOWN(CFG_TEE_RAM_START, block_size),
-			ROUNDUP(CFG_TEE_RAM_START + CFG_TEE_RAM_VA_SIZE,
-				block_size),
-			SMALL_PAGE_SHIFT, 0))
+	if (!tee_mm_init(&tee_mm_vcore, TEE_RAM_VA_START,
+			 TEE_RAM_VA_START + CFG_TEE_RAM_VA_SIZE,
+			 SMALL_PAGE_SHIFT, 0))
 		panic("tee_mm_vcore init failed");
 
 	/*
@@ -311,9 +291,8 @@ static void init_runtime(unsigned long pageable_part)
 	mm = tee_mm_alloc2(&tee_mm_vcore, (vaddr_t)__pageable_start,
 			   pageable_size);
 	assert(mm);
-	if (!tee_pager_add_core_area(tee_mm_get_smem(mm), tee_mm_get_bytes(mm),
-				     TEE_MATTR_PRX, paged_store, hashes))
-		panic("failed to add pageable to vcore");
+	tee_pager_add_core_area(tee_mm_get_smem(mm), tee_mm_get_bytes(mm),
+				TEE_MATTR_PRX, paged_store, hashes);
 
 	tee_pager_add_pages((vaddr_t)__pageable_start,
 			init_size / SMALL_PAGE_SIZE, false);
@@ -346,10 +325,10 @@ static void init_asan(void)
 	 */
 
 #define __ASAN_SHADOW_START \
-	ROUNDUP(CFG_TEE_RAM_START + (CFG_TEE_RAM_VA_SIZE * 8) / 9 - 8, 8)
+	ROUNDUP(TEE_RAM_VA_START + (CFG_TEE_RAM_VA_SIZE * 8) / 9 - 8, 8)
 	assert(__ASAN_SHADOW_START == (vaddr_t)&__asan_shadow_start);
 #define __CFG_ASAN_SHADOW_OFFSET \
-	(__ASAN_SHADOW_START - (CFG_TEE_RAM_START / 8))
+	(__ASAN_SHADOW_START - (TEE_RAM_VA_START / 8))
 	COMPILE_TIME_ASSERT(CFG_ASAN_SHADOW_OFFSET == __CFG_ASAN_SHADOW_OFFSET);
 #undef __ASAN_SHADOW_START
 #undef __CFG_ASAN_SHADOW_OFFSET
@@ -358,7 +337,7 @@ static void init_asan(void)
 	 * Assign area covered by the shadow area, everything from start up
 	 * to the beginning of the shadow area.
 	 */
-	asan_set_shadowed((void *)CFG_TEE_LOAD_ADDR, &__asan_shadow_start);
+	asan_set_shadowed((void *)TEE_TEXT_VA_START, &__asan_shadow_start);
 
 	/*
 	 * Add access to areas that aren't opened automatically by a
@@ -368,6 +347,8 @@ static void init_asan(void)
 	asan_tag_access(&__ctor_list, &__ctor_end);
 	asan_tag_access(__rodata_start, __rodata_end);
 	asan_tag_access(__nozi_start, __nozi_end);
+	asan_tag_access(__exidx_start, __exidx_end);
+	asan_tag_access(__extab_start, __extab_end);
 
 	init_run_constructors();
 
@@ -429,6 +410,104 @@ static int add_optee_dt_node(void *fdt)
 		return -1;
 	return 0;
 }
+
+#ifdef CFG_PSCI_ARM32
+static int append_psci_compatible(void *fdt, int offs, const char *str)
+{
+	return fdt_appendprop(fdt, offs, "compatible", str, strlen(str) + 1);
+}
+
+static int dt_add_psci_node(void *fdt)
+{
+	int offs;
+
+	if (fdt_path_offset(fdt, "/psci") >= 0) {
+		DMSG("PSCI Device Tree node already exists!\n");
+		return 0;
+	}
+
+	offs = fdt_path_offset(fdt, "/");
+	if (offs < 0)
+		return -1;
+	offs = fdt_add_subnode(fdt, offs, "psci");
+	if (offs < 0)
+		return -1;
+	if (append_psci_compatible(fdt, offs, "arm,psci-1.0"))
+		return -1;
+	if (append_psci_compatible(fdt, offs, "arm,psci-0.2"))
+		return -1;
+	if (append_psci_compatible(fdt, offs, "arm,psci"))
+		return -1;
+	if (fdt_setprop_string(fdt, offs, "method", "smc"))
+		return -1;
+	if (fdt_setprop_u32(fdt, offs, "cpu_suspend", PSCI_CPU_SUSPEND))
+		return -1;
+	if (fdt_setprop_u32(fdt, offs, "cpu_off", PSCI_CPU_OFF))
+		return -1;
+	if (fdt_setprop_u32(fdt, offs, "cpu_on", PSCI_CPU_ON))
+		return -1;
+	if (fdt_setprop_u32(fdt, offs, "sys_poweroff", PSCI_SYSTEM_OFF))
+		return -1;
+	if (fdt_setprop_u32(fdt, offs, "sys_reset", PSCI_SYSTEM_RESET))
+		return -1;
+	return 0;
+}
+
+static int check_node_compat_prefix(void *fdt, int offs, const char *prefix)
+{
+	const size_t prefix_len = strlen(prefix);
+	size_t l;
+	int plen;
+	const char *prop;
+
+	prop = fdt_getprop(fdt, offs, "compatible", &plen);
+	if (!prop)
+		return -1;
+
+	while (plen > 0) {
+		if (memcmp(prop, prefix, prefix_len) == 0)
+			return 0; /* match */
+
+		l = strlen(prop) + 1;
+		prop += l;
+		plen -= l;
+	}
+
+	return -1;
+}
+
+static int dt_add_psci_cpu_enable_methods(void *fdt)
+{
+	int offs = 0;
+
+	while (1) {
+		offs = fdt_next_node(fdt, offs, NULL);
+		if (offs < 0)
+			break;
+		if (fdt_getprop(fdt, offs, "enable-method", NULL))
+			continue; /* already set */
+		if (check_node_compat_prefix(fdt, offs, "arm,cortex-a"))
+			continue; /* no compatible */
+		if (fdt_setprop_string(fdt, offs, "enable-method", "psci"))
+			return -1;
+		/* Need to restart scanning as offsets may have changed */
+		offs = 0;
+	}
+	return 0;
+}
+
+static int config_psci(void *fdt)
+{
+	if (dt_add_psci_node(fdt))
+		return -1;
+	return dt_add_psci_cpu_enable_methods(fdt);
+}
+#else
+static int config_psci(void *fdt __unused)
+{
+	return 0;
+}
+#endif /*CFG_PSCI_ARM32*/
 
 static void set_dt_val(void *data, uint32_t cell_size, uint64_t val)
 {
@@ -541,11 +620,11 @@ static struct core_mmu_phys_mem *get_memory(void *fdt, size_t *nelems)
 		return NULL;
 
 	prop_len = addr_size;
-	addr_size = fdt_address_cells(fdt, offs);
+	addr_size = fdt_address_cells(fdt, 0);
 	if (addr_size < 0)
 		return NULL;
 
-	len_size = fdt_size_cells(fdt, offs);
+	len_size = fdt_size_cells(fdt, 0);
 	if (len_size < 0)
 		return NULL;
 
@@ -592,7 +671,8 @@ static int config_nsmem(void *fdt)
 
 	core_mmu_get_mem_by_type(MEM_AREA_NSEC_SHM, &shm_start, &shm_end);
 	if (shm_start != shm_end)
-		return add_res_mem_dt_node(fdt, "optee", shm_start,
+		return add_res_mem_dt_node(fdt, "optee",
+					   virt_to_phys((void *)shm_start),
 					   shm_end - shm_start);
 
 	DMSG("No SHM configured");
@@ -633,6 +713,9 @@ static void init_fdt(unsigned long phys_fdt)
 
 	if (add_optee_dt_node(fdt))
 		panic("Failed to add OP-TEE Device Tree node");
+
+	if (config_psci(fdt))
+		panic("Failed to config PSCI");
 
 	if (config_nsmem(fdt))
 		panic("Failed to config non-secure memory");

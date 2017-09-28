@@ -26,6 +26,7 @@
  */
 
 #include <kernel/thread.h>
+#include <sm/pm.h>
 #include <sm/sm.h>
 #include <types_ext.h>
 #include "thread_private.h"
@@ -52,6 +53,14 @@ DEFINES
 	DEFINE(THREAD_SVC_REG_R0, offsetof(struct thread_svc_regs, r0));
 	DEFINE(THREAD_SVC_REG_R5, offsetof(struct thread_svc_regs, r5));
 	DEFINE(THREAD_SVC_REG_R6, offsetof(struct thread_svc_regs, r6));
+
+	/* struct thread_core_local */
+	DEFINE(THREAD_CORE_LOCAL_R0, offsetof(struct thread_core_local, r[0]));
+	DEFINE(THREAD_CORE_LOCAL_SM_PM_CTX_PHYS,
+	       offsetof(struct thread_core_local, sm_pm_ctx_phys));
+	DEFINE(THREAD_CORE_LOCAL_SIZE, sizeof(struct thread_core_local));
+
+	DEFINE(SM_PM_CTX_SIZE, sizeof(struct sm_pm_ctx));
 #endif /*ARM32*/
 
 #ifdef ARM64
@@ -93,6 +102,11 @@ DEFINES
 	DEFINE(THREAD_USER_MODE_REC_SIZE, sizeof(struct thread_user_mode_rec));
 
 	/* struct thread_core_local */
+	DEFINE(THREAD_CORE_LOCAL_X0, offsetof(struct thread_core_local, x[0]));
+	DEFINE(THREAD_CORE_LOCAL_X2, offsetof(struct thread_core_local, x[2]));
+#endif /*ARM64*/
+
+	/* struct thread_core_local */
 	DEFINE(THREAD_CORE_LOCAL_TMP_STACK_VA_END,
 		offsetof(struct thread_core_local, tmp_stack_va_end));
 	DEFINE(THREAD_CORE_LOCAL_CURR_THREAD,
@@ -101,7 +115,5 @@ DEFINES
 		offsetof(struct thread_core_local, flags));
 	DEFINE(THREAD_CORE_LOCAL_ABT_STACK_VA_END,
 		offsetof(struct thread_core_local, abt_stack_va_end));
-	DEFINE(THREAD_CORE_LOCAL_X0, offsetof(struct thread_core_local, x[0]));
-	DEFINE(THREAD_CORE_LOCAL_X2, offsetof(struct thread_core_local, x[2]));
-#endif /*ARM64*/
+
 }

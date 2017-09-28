@@ -30,9 +30,5 @@
 
 /* Returns true if returning to sec, false if returning to nsec */
 bool sm_from_nsec(struct sm_ctx *ctx);
-
-void sm_save_modes_regs(struct sm_mode_regs *regs);
-void sm_restore_modes_regs(struct sm_mode_regs *regs);
-
 #endif /*SM_PRIVATE_H*/
 

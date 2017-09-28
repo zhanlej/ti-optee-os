@@ -28,23 +28,24 @@
 
 #include <arm.h>
 #include <assert.h>
+#include <io.h>
 #include <keep.h>
-#include <sys/queue.h>
 #include <kernel/abort.h>
 #include <kernel/panic.h>
 #include <kernel/spinlock.h>
-#include <kernel/tlb_helpers.h>
 #include <kernel/tee_misc.h>
 #include <kernel/tee_ta_manager.h>
 #include <kernel/thread.h>
+#include <kernel/tlb_helpers.h>
 #include <mm/core_memprot.h>
 #include <mm/tee_mm.h>
 #include <mm/tee_pager.h>
-#include <types_ext.h>
 #include <stdlib.h>
+#include <sys/queue.h>
 #include <tee_api_defines.h>
 #include <tee/tee_cryp_provider.h>
 #include <trace.h>
+#include <types_ext.h>
 #include <utee_defines.h>
 #include <util.h>
 
@@ -174,9 +175,19 @@ void tee_pager_get_stats(struct tee_pager_stats *stats)
 }
 #endif /* CFG_WITH_STATS */
 
-static struct pgt pager_core_pgt;
-struct core_mmu_table_info tee_pager_tbl_info;
-static struct core_mmu_table_info pager_alias_tbl_info;
+#define TBL_NUM_ENTRIES	(CORE_MMU_PGDIR_SIZE / SMALL_PAGE_SIZE)
+#define TBL_LEVEL	CORE_MMU_PGDIR_LEVEL
+#define TBL_SHIFT	SMALL_PAGE_SHIFT
+
+#define EFFECTIVE_VA_SIZE \
+	(ROUNDUP(TEE_RAM_VA_START + CFG_TEE_RAM_VA_SIZE, \
+		 CORE_MMU_PGDIR_SIZE) - \
+	 ROUNDDOWN(TEE_RAM_VA_START, CORE_MMU_PGDIR_SIZE))
+
+static struct pager_table {
+	struct pgt pgt;
+	struct core_mmu_table_info tbl_info;
+} pager_tables[EFFECTIVE_VA_SIZE / CORE_MMU_PGDIR_SIZE];
 
 static unsigned pager_spinlock = SPINLOCK_UNLOCK;
 
@@ -189,9 +200,59 @@ static tee_mm_entry_t *pager_alias_area;
  */
 static uintptr_t pager_alias_next_free;
 
-static uint32_t pager_lock(void)
+#ifdef CFG_TEE_CORE_DEBUG
+#define pager_lock(ai) pager_lock_dldetect(__func__, __LINE__, ai)
+
+static uint32_t pager_lock_dldetect(const char *func, const int line,
+				    struct abort_info *ai)
+{
+	uint32_t exceptions = thread_mask_exceptions(THREAD_EXCP_ALL);
+	unsigned int retries = 0;
+	unsigned int reminder = 0;
+
+	while (!cpu_spin_trylock(&pager_spinlock)) {
+		retries++;
+		if (!retries) {
+			/* wrapped, time to report */
+			trace_printf(func, line, TRACE_ERROR, true,
+				     "possible spinlock deadlock reminder %u",
+				     reminder);
+			if (reminder < UINT_MAX)
+				reminder++;
+			if (ai)
+				abort_print(ai);
+		}
+	}
+
+	return exceptions;
+}
+#else
+static uint32_t pager_lock(struct abort_info __unused *ai)
 {
 	return cpu_spin_lock_xsave(&pager_spinlock);
+}
+#endif
+
+static uint32_t pager_lock_check_stack(size_t stack_size)
+{
+	if (stack_size) {
+		int8_t buf[stack_size];
+		size_t n;
+
+		/*
+		 * Make sure to touch all pages of the stack that we expect
+		 * to use with this lock held. We need to take eventual
+		 * page faults before the lock is taken or we'll deadlock
+		 * the pager. The pages that are populated in this way will
+		 * eventually be released at certain save transitions of
+		 * the thread.
+		 */
+		for (n = 0; n < stack_size; n += SMALL_PAGE_SIZE)
+			write8(1, (vaddr_t)buf + n);
+		write8(1, (vaddr_t)buf + stack_size - 1);
+	}
+
+	return pager_lock(NULL);
 }
 
 static void pager_unlock(uint32_t exceptions)
@@ -199,46 +260,126 @@ static void pager_unlock(uint32_t exceptions)
 	cpu_spin_unlock_xrestore(&pager_spinlock, exceptions);
 }
 
+void *tee_pager_phys_to_virt(paddr_t pa)
+{
+	struct core_mmu_table_info ti;
+	unsigned idx;
+	uint32_t a;
+	paddr_t p;
+	vaddr_t v;
+	size_t n;
+
+	/*
+	 * Most addresses are mapped lineary, try that first if possible.
+	 */
+	if (!tee_pager_get_table_info(pa, &ti))
+		return NULL; /* impossible pa */
+	idx = core_mmu_va2idx(&ti, pa);
+	core_mmu_get_entry(&ti, idx, &p, &a);
+	if ((a & TEE_MATTR_VALID_BLOCK) && p == pa)
+		return (void *)core_mmu_idx2va(&ti, idx);
+
+	n = 0;
+	idx = core_mmu_va2idx(&pager_tables[n].tbl_info, TEE_RAM_VA_START);
+	while (true) {
+		while (idx < TBL_NUM_ENTRIES) {
+			v = core_mmu_idx2va(&pager_tables[n].tbl_info, idx);
+			if (v >= (TEE_RAM_VA_START + CFG_TEE_RAM_VA_SIZE))
+				return NULL;
+
+			core_mmu_get_entry(&pager_tables[n].tbl_info,
+					   idx, &p, &a);
+			if ((a & TEE_MATTR_VALID_BLOCK) && p == pa)
+				return (void *)v;
+			idx++;
+		}
+
+		n++;
+		if (n >= ARRAY_SIZE(pager_tables))
+			return NULL;
+		idx = 0;
+	}
+
+	return NULL;
+}
+
+static struct pager_table *find_pager_table_may_fail(vaddr_t va)
+{
+	size_t n;
+	const vaddr_t mask = CORE_MMU_PGDIR_MASK;
+
+	n = ((va & ~mask) - pager_tables[0].tbl_info.va_base) >>
+	    CORE_MMU_PGDIR_SHIFT;
+	if (n >= ARRAY_SIZE(pager_tables))
+		return NULL;
+
+	assert(va >= pager_tables[n].tbl_info.va_base &&
+	       va <= (pager_tables[n].tbl_info.va_base | mask));
+
+	return pager_tables + n;
+}
+
+static struct pager_table *find_pager_table(vaddr_t va)
+{
+	struct pager_table *pt = find_pager_table_may_fail(va);
+
+	assert(pt);
+	return pt;
+}
+
+bool tee_pager_get_table_info(vaddr_t va, struct core_mmu_table_info *ti)
+{
+	struct pager_table *pt = find_pager_table_may_fail(va);
+
+	if (!pt)
+		return false;
+
+	*ti = pt->tbl_info;
+	return true;
+}
+
+static struct core_mmu_table_info *find_table_info(vaddr_t va)
+{
+	return &find_pager_table(va)->tbl_info;
+}
+
+static struct pgt *find_core_pgt(vaddr_t va)
+{
+	return &find_pager_table(va)->pgt;
+}
+
 static void set_alias_area(tee_mm_entry_t *mm)
 {
-	struct core_mmu_table_info *ti = &pager_alias_tbl_info;
-	size_t tbl_va_size;
+	struct pager_table *pt;
 	unsigned idx;
-	unsigned last_idx;
 	vaddr_t smem = tee_mm_get_smem(mm);
 	size_t nbytes = tee_mm_get_bytes(mm);
+	vaddr_t v;
 
 	DMSG("0x%" PRIxVA " - 0x%" PRIxVA, smem, smem + nbytes);
 
-	if (pager_alias_area)
-		panic("null pager_alias_area");
-
-	if (!ti->num_entries && !core_mmu_find_table(smem, UINT_MAX, ti))
-		panic("Can't find translation table");
-
-	if ((1 << ti->shift) != SMALL_PAGE_SIZE)
-		panic("Unsupported page size in translation table");
-
-	tbl_va_size = (1 << ti->shift) * ti->num_entries;
-	if (!core_is_buffer_inside(smem, nbytes,
-				   ti->va_base, tbl_va_size)) {
-		EMSG("area 0x%" PRIxVA " len 0x%zx doesn't fit it translation table 0x%" PRIxVA " len 0x%zx",
-		     smem, nbytes, ti->va_base, tbl_va_size);
-		panic();
-	}
-
-	if (smem & SMALL_PAGE_MASK || nbytes & SMALL_PAGE_MASK)
-		panic("invalid area alignment");
-
+	assert(!pager_alias_area);
 	pager_alias_area = mm;
 	pager_alias_next_free = smem;
 
 	/* Clear all mapping in the alias area */
-	idx = core_mmu_va2idx(ti, smem);
-	last_idx = core_mmu_va2idx(ti, smem + nbytes);
-	for (; idx < last_idx; idx++)
-		core_mmu_set_entry(ti, idx, 0, 0);
+	pt = find_pager_table(smem);
+	idx = core_mmu_va2idx(&pt->tbl_info, smem);
+	while (pt <= (pager_tables + ARRAY_SIZE(pager_tables) - 1)) {
+		while (idx < TBL_NUM_ENTRIES) {
+			v = core_mmu_idx2va(&pt->tbl_info, idx);
+			if (v > (smem + nbytes))
+				goto out;
 
+			core_mmu_set_entry(&pt->tbl_info, idx, 0, 0);
+			idx++;
+		}
+
+		pt++;
+		idx = 0;
+	}
+
+out:
 	tlbi_mva_range(smem, nbytes, SMALL_PAGE_SIZE);
 }
 
@@ -246,6 +387,71 @@ static void generate_ae_key(void)
 {
 	if (rng_generate(pager_ae_key, sizeof(pager_ae_key)) != TEE_SUCCESS)
 		panic("failed to generate random");
+}
+
+static size_t tbl_usage_count(struct core_mmu_table_info *ti)
+{
+	size_t n;
+	paddr_t pa;
+	size_t usage = 0;
+
+	for (n = 0; n < ti->num_entries; n++) {
+		core_mmu_get_entry(ti, n, &pa, NULL);
+		if (pa)
+			usage++;
+	}
+	return usage;
+}
+
+static void area_get_entry(struct tee_pager_area *area, size_t idx,
+			   paddr_t *pa, uint32_t *attr)
+{
+	assert(area->pgt);
+	assert(idx < TBL_NUM_ENTRIES);
+	core_mmu_get_entry_primitive(area->pgt->tbl, TBL_LEVEL, idx, pa, attr);
+}
+
+static void area_set_entry(struct tee_pager_area *area, size_t idx,
+			   paddr_t pa, uint32_t attr)
+{
+	assert(area->pgt);
+	assert(idx < TBL_NUM_ENTRIES);
+	core_mmu_set_entry_primitive(area->pgt->tbl, TBL_LEVEL, idx, pa, attr);
+}
+
+static size_t area_va2idx(struct tee_pager_area *area, vaddr_t va)
+{
+	return (va - (area->base & ~CORE_MMU_PGDIR_MASK)) >> SMALL_PAGE_SHIFT;
+}
+
+static vaddr_t area_idx2va(struct tee_pager_area *area, size_t idx)
+{
+	return (idx << SMALL_PAGE_SHIFT) + (area->base & ~CORE_MMU_PGDIR_MASK);
+}
+
+void tee_pager_early_init(void)
+{
+	size_t n;
+
+	/*
+	 * Note that this depends on add_pager_vaspace() adding vaspace
+	 * after end of memory.
+	 */
+	for (n = 0; n < ARRAY_SIZE(pager_tables); n++) {
+		if (!core_mmu_find_table(TEE_RAM_VA_START +
+					 n * CORE_MMU_PGDIR_SIZE, UINT_MAX,
+					 &pager_tables[n].tbl_info))
+			panic("can't find mmu tables");
+
+		if (pager_tables[n].tbl_info.shift != TBL_SHIFT)
+			panic("Unsupported page size in translation table");
+		assert(pager_tables[n].tbl_info.num_entries == TBL_NUM_ENTRIES);
+		assert(pager_tables[n].tbl_info.level == TBL_LEVEL);
+
+		pager_tables[n].pgt.tbl = pager_tables[n].tbl_info.table;
+		pgt_set_used_entries(&pager_tables[n].pgt,
+				tbl_usage_count(&pager_tables[n].tbl_info));
+	}
 }
 
 void tee_pager_init(tee_mm_entry_t *mm_alias)
@@ -257,7 +463,7 @@ void tee_pager_init(tee_mm_entry_t *mm_alias)
 static void *pager_add_alias_page(paddr_t pa)
 {
 	unsigned idx;
-	struct core_mmu_table_info *ti = &pager_alias_tbl_info;
+	struct core_mmu_table_info *ti;
 	/* Alias pages mapped without write permission: runtime will care */
 	uint32_t attr = TEE_MATTR_VALID_BLOCK | TEE_MATTR_GLOBAL |
 			(TEE_MATTR_CACHE_CACHED << TEE_MATTR_CACHE_SHIFT) |
@@ -265,12 +471,10 @@ static void *pager_add_alias_page(paddr_t pa)
 
 	DMSG("0x%" PRIxPA, pa);
 
-	if (!pager_alias_next_free || !ti->num_entries)
-		panic("invalid alias entry");
-
+	ti = find_table_info(pager_alias_next_free);
 	idx = core_mmu_va2idx(ti, pager_alias_next_free);
 	core_mmu_set_entry(ti, idx, pa, attr);
-	pgt_inc_used_entries(&pager_core_pgt);
+	pgt_inc_used_entries(find_core_pgt(pager_alias_next_free));
 	pager_alias_next_free += SMALL_PAGE_SIZE;
 	if (pager_alias_next_free >= (tee_mm_get_smem(pager_alias_area) +
 				      tee_mm_get_bytes(pager_alias_area)))
@@ -328,7 +532,7 @@ bad:
 
 static void area_insert_tail(struct tee_pager_area *area)
 {
-	uint32_t exceptions = pager_lock();
+	uint32_t exceptions = pager_lock_check_stack(8);
 
 	TAILQ_INSERT_TAIL(&tee_pager_area_head, area, link);
 
@@ -336,27 +540,14 @@ static void area_insert_tail(struct tee_pager_area *area)
 }
 KEEP_PAGER(area_insert_tail);
 
-static size_t tbl_usage_count(struct pgt *pgt)
-{
-	size_t n;
-	paddr_t pa;
-	size_t usage = 0;
-
-	for (n = 0; n < tee_pager_tbl_info.num_entries; n++) {
-		core_mmu_get_entry_primitive(pgt->tbl, tee_pager_tbl_info.level,
-					     n, &pa, NULL);
-		if (pa)
-			usage++;
-	}
-	return usage;
-}
-
-bool tee_pager_add_core_area(vaddr_t base, size_t size, uint32_t flags,
-			const void *store, const void *hashes)
+void tee_pager_add_core_area(vaddr_t base, size_t size, uint32_t flags,
+			     const void *store, const void *hashes)
 {
 	struct tee_pager_area *area;
-	size_t tbl_va_size;
-	struct core_mmu_table_info *ti = &tee_pager_tbl_info;
+	vaddr_t b = base;
+	size_t s = size;
+	size_t s2;
+
 
 	DMSG("0x%" PRIxPTR " - 0x%" PRIxPTR " : flags 0x%x, store %p, hashes %p",
 		base, base + size, flags, store, hashes);
@@ -372,25 +563,19 @@ bool tee_pager_add_core_area(vaddr_t base, size_t size, uint32_t flags,
 	if ((flags & TEE_MATTR_PW) && (store || hashes))
 		panic("non-write pages must provide store and hashes");
 
-	if (!pager_core_pgt.tbl) {
-		pager_core_pgt.tbl = ti->table;
-		pgt_set_used_entries(&pager_core_pgt,
-				     tbl_usage_count(&pager_core_pgt));
+	while (s) {
+		s2 = MIN(CORE_MMU_PGDIR_SIZE - (b & CORE_MMU_PGDIR_MASK), s);
+		area = alloc_area(find_core_pgt(b), b, s2, flags,
+				  (const uint8_t *)store + b - base,
+				  (const uint8_t *)hashes + (b - base) /
+							SMALL_PAGE_SIZE *
+							TEE_SHA256_HASH_SIZE);
+		if (!area)
+			panic("alloc_area");
+		area_insert_tail(area);
+		b += s2;
+		s -= s2;
 	}
-
-	tbl_va_size = (1 << ti->shift) * ti->num_entries;
-	if (!core_is_buffer_inside(base, size, ti->va_base, tbl_va_size)) {
-		DMSG("area 0x%" PRIxPTR " len 0x%zx doesn't fit it translation table 0x%" PRIxVA " len 0x%zx",
-			base, size, ti->va_base, tbl_va_size);
-		return false;
-	}
-
-	area = alloc_area(&pager_core_pgt, base, size, flags, store, hashes);
-	if (!area)
-		return false;
-
-	area_insert_tail(area);
-	return true;
 }
 
 static struct tee_pager_area *find_area(struct tee_pager_area_head *areas,
@@ -439,11 +624,13 @@ static uint32_t get_area_mattr(uint32_t area_flags)
 
 static paddr_t get_pmem_pa(struct tee_pager_pmem *pmem)
 {
+	struct core_mmu_table_info *ti;
 	paddr_t pa;
 	unsigned idx;
 
-	idx = core_mmu_va2idx(&pager_alias_tbl_info, (vaddr_t)pmem->va_alias);
-	core_mmu_get_entry(&pager_alias_tbl_info, idx, &pa, NULL);
+	ti = find_table_info((vaddr_t)pmem->va_alias);
+	idx = core_mmu_va2idx(ti, (vaddr_t)pmem->va_alias);
+	core_mmu_get_entry(ti, idx, &pa, NULL);
 	return pa;
 }
 
@@ -491,7 +678,7 @@ static void tee_pager_load_page(struct tee_pager_area *area, vaddr_t page_va,
 	unsigned int idx_alias;
 
 	/* Insure we are allowed to write to aliased virtual page */
-	ti = &pager_alias_tbl_info;
+	ti = find_table_info((vaddr_t)va_alias);
 	idx_alias = core_mmu_va2idx(ti, (vaddr_t)va_alias);
 	core_mmu_get_entry(ti, idx_alias, &pa_alias, &attr_alias);
 	if (!(attr_alias & TEE_MATTR_PW)) {
@@ -558,35 +745,6 @@ static void tee_pager_save_page(struct tee_pager_pmem *pmem, uint32_t attr)
 			pmem->area->base + idx * SMALL_PAGE_SIZE,
 			pmem->area->u.rwp[idx].iv);
 	}
-}
-
-static void area_get_entry(struct tee_pager_area *area, size_t idx,
-			   paddr_t *pa, uint32_t *attr)
-{
-	assert(area->pgt);
-	assert(idx < tee_pager_tbl_info.num_entries);
-	core_mmu_get_entry_primitive(area->pgt->tbl, tee_pager_tbl_info.level,
-				     idx, pa, attr);
-}
-
-static void area_set_entry(struct tee_pager_area *area, size_t idx,
-			   paddr_t pa, uint32_t attr)
-{
-	assert(area->pgt);
-	assert(idx < tee_pager_tbl_info.num_entries);
-	core_mmu_set_entry_primitive(area->pgt->tbl, tee_pager_tbl_info.level,
-				     idx, pa, attr);
-}
-
-static size_t area_va2idx(struct tee_pager_area *area, vaddr_t va)
-{
-	return (va - (area->base & ~CORE_MMU_PGDIR_MASK)) >> SMALL_PAGE_SHIFT;
-}
-
-static vaddr_t __maybe_unused area_idx2va(struct tee_pager_area *area,
-					 size_t idx)
-{
-	return (idx << SMALL_PAGE_SHIFT) + (area->base & ~CORE_MMU_PGDIR_MASK);
 }
 
 #ifdef CFG_PAGED_USER_TA
@@ -711,15 +869,15 @@ static void init_tbl_info_from_pgt(struct core_mmu_table_info *ti,
 	assert(pgt);
 	ti->table = pgt->tbl;
 	ti->va_base = pgt->vabase;
-	ti->level = tee_pager_tbl_info.level;
-	ti->shift = tee_pager_tbl_info.shift;
-	ti->num_entries = tee_pager_tbl_info.num_entries;
+	ti->level = TBL_LEVEL;
+	ti->shift = TBL_SHIFT;
+	ti->num_entries = TBL_NUM_ENTRIES;
 }
 
 static void transpose_area(struct tee_pager_area *area, struct pgt *new_pgt,
 			   vaddr_t new_base)
 {
-	uint32_t exceptions = pager_lock();
+	uint32_t exceptions = pager_lock_check_stack(64);
 
 	/*
 	 * If there's no pgt assigned to the old area there's no pages to
@@ -805,7 +963,7 @@ static void rem_area(struct tee_pager_area_head *area_head,
 	struct tee_pager_pmem *pmem;
 	uint32_t exceptions;
 
-	exceptions = pager_lock();
+	exceptions = pager_lock_check_stack(64);
 
 	TAILQ_REMOVE(area_head, area, link);
 
@@ -874,7 +1032,7 @@ bool tee_pager_set_uta_area_attr(struct user_ta_ctx *utc, vaddr_t base,
 		f |= TEE_MATTR_PW;
 	f = get_area_mattr(f);
 
-	exceptions = pager_lock();
+	exceptions = pager_lock_check_stack(64);
 
 	while (s) {
 		s2 = MIN(CORE_MMU_PGDIR_SIZE - (b & CORE_MMU_PGDIR_MASK), s);
@@ -967,12 +1125,16 @@ static bool tee_pager_unhide_page(vaddr_t page_va)
 				FMSG("unhide %#" PRIxVA " a %#" PRIX32,
 					page_va, a);
 			area_set_entry(pmem->area, pmem->pgidx, pa, a);
+			/*
+			 * Note that TLB invalidation isn't needed since
+			 * there wasn't a valid mapping before. We should
+			 * use a barrier though, to make sure that the
+			 * change is visible.
+			 */
+			dsb_ishst();
 
 			TAILQ_REMOVE(&tee_pager_pmem_head, pmem, link);
 			TAILQ_INSERT_TAIL(&tee_pager_pmem_head, pmem, link);
-
-			tlbi_mva_allasid(page_va);
-
 			incr_hidden_hits();
 			return true;
 		}
@@ -1220,7 +1382,7 @@ bool tee_pager_handle_fault(struct abort_info *ai)
 	 * page, instead we use the aliased mapping to populate the page
 	 * and once everything is ready we map it.
 	 */
-	exceptions = pager_lock();
+	exceptions = pager_lock(ai);
 
 	stat_handle_fault();
 
@@ -1241,6 +1403,7 @@ bool tee_pager_handle_fault(struct abort_info *ai)
 	if (!tee_pager_unhide_page(page_va)) {
 		struct tee_pager_pmem *pmem = NULL;
 		uint32_t attr;
+		paddr_t pa;
 
 		/*
 		 * The page wasn't hidden, but some other core may have
@@ -1265,40 +1428,67 @@ bool tee_pager_handle_fault(struct abort_info *ai)
 		/* load page code & data */
 		tee_pager_load_page(area, page_va, pmem->va_alias);
 
+
+		pmem->area = area;
+		pmem->pgidx = area_va2idx(area, ai->va);
+		attr = get_area_mattr(area->flags) &
+			~(TEE_MATTR_PW | TEE_MATTR_UW);
+		pa = get_pmem_pa(pmem);
+
 		/*
 		 * We've updated the page using the aliased mapping and
 		 * some cache maintenence is now needed if it's an
 		 * executable page.
 		 *
 		 * Since the d-cache is a Physically-indexed,
-		 * physically-tagged (PIPT) cache we can clean the aliased
-		 * address instead of the real virtual address.
+		 * physically-tagged (PIPT) cache we can clean either the
+		 * aliased address or the real virtual address. In this
+		 * case we choose the real virtual address.
 		 *
 		 * The i-cache can also be PIPT, but may be something else
-		 * to, to keep it simple we invalidate the entire i-cache.
-		 * As a future optimization we may invalidate only the
-		 * aliased area if it a PIPT cache else the entire cache.
+		 * too like VIPT. The current code requires the caches to
+		 * implement the IVIPT extension, that is:
+		 * "instruction cache maintenance is required only after
+		 * writing new data to a physical address that holds an
+		 * instruction."
+		 *
+		 * To portably invalidate the icache the page has to
+		 * be mapped at the final virtual address but not
+		 * executable.
 		 */
 		if (area->flags & (TEE_MATTR_PX | TEE_MATTR_UX)) {
+			uint32_t mask = TEE_MATTR_PX | TEE_MATTR_UX |
+					TEE_MATTR_PW | TEE_MATTR_UW;
+
+			/* Set a temporary read-only mapping */
+			area_set_entry(pmem->area, pmem->pgidx, pa,
+				       attr & ~mask);
+			tlbi_mva_allasid(page_va);
+
 			/*
 			 * Doing these operations to LoUIS (Level of
 			 * unification, Inner Shareable) would be enough
 			 */
-			cache_op_inner(DCACHE_AREA_CLEAN, pmem->va_alias,
-					SMALL_PAGE_SIZE);
-			cache_op_inner(ICACHE_INVALIDATE, NULL, 0);
-		}
+			cache_op_inner(DCACHE_AREA_CLEAN, (void *)page_va,
+				       SMALL_PAGE_SIZE);
+			cache_op_inner(ICACHE_AREA_INVALIDATE, (void *)page_va,
+				       SMALL_PAGE_SIZE);
 
-		pmem->area = area;
-		pmem->pgidx = area_va2idx(area, ai->va);
-		attr = get_area_mattr(area->flags) &
-			~(TEE_MATTR_PW | TEE_MATTR_UW);
-		area_set_entry(area, pmem->pgidx, get_pmem_pa(pmem), attr);
-		/* No need to flush TLB for this entry, it was invalid */
+			/* Set the final mapping */
+			area_set_entry(area, pmem->pgidx, pa, attr);
+			tlbi_mva_allasid(page_va);
+		} else {
+			area_set_entry(area, pmem->pgidx, pa, attr);
+			/*
+			 * No need to flush TLB for this entry, it was
+			 * invalid. We should use a barrier though, to make
+			 * sure that the change is visible.
+			 */
+			dsb_ishst();
+		}
 		pgt_inc_used_entries(area->pgt);
 
-		FMSG("Mapped 0x%" PRIxVA " -> 0x%" PRIxPA,
-		     area_idx2va(area, pmem->pgidx), get_pmem_pa(pmem));
+		FMSG("Mapped 0x%" PRIxVA " -> 0x%" PRIxPA, page_va, pa);
 
 	}
 
@@ -1311,7 +1501,6 @@ out:
 
 void tee_pager_add_pages(vaddr_t vaddr, size_t npages, bool unmap)
 {
-	struct core_mmu_table_info *ti = &tee_pager_tbl_info;
 	size_t n;
 
 	DMSG("0x%" PRIxVA " - 0x%" PRIxVA " : %d",
@@ -1319,12 +1508,15 @@ void tee_pager_add_pages(vaddr_t vaddr, size_t npages, bool unmap)
 
 	/* setup memory */
 	for (n = 0; n < npages; n++) {
+		struct core_mmu_table_info *ti;
 		struct tee_pager_pmem *pmem;
 		vaddr_t va = vaddr + n * SMALL_PAGE_SIZE;
-		unsigned pgidx = core_mmu_va2idx(ti, va);
+		unsigned int pgidx;
 		paddr_t pa;
 		uint32_t attr;
 
+		ti = find_table_info(va);
+		pgidx = core_mmu_va2idx(ti, va);
 		/*
 		 * Note that we can only support adding pages in the
 		 * valid range of this table info, currently not a problem.
@@ -1345,14 +1537,14 @@ void tee_pager_add_pages(vaddr_t vaddr, size_t npages, bool unmap)
 			pmem->area = NULL;
 			pmem->pgidx = INVALID_PGIDX;
 			core_mmu_set_entry(ti, pgidx, 0, 0);
-			pgt_dec_used_entries(&pager_core_pgt);
+			pgt_dec_used_entries(find_core_pgt(va));
 		} else {
 			/*
 			 * The page is still mapped, let's assign the area
 			 * and update the protection bits accordingly.
 			 */
 			pmem->area = find_area(&tee_pager_area_head, va);
-			assert(pmem->area->pgt == &pager_core_pgt);
+			assert(pmem->area->pgt == find_core_pgt(va));
 			pmem->pgidx = pgidx;
 			assert(pa == get_pmem_pa(pmem));
 			area_set_entry(pmem->area, pgidx, pa,
@@ -1417,7 +1609,7 @@ void tee_pager_pgt_save_and_release_entries(struct pgt *pgt)
 {
 	struct tee_pager_pmem *pmem;
 	struct tee_pager_area *area;
-	uint32_t exceptions = pager_lock();
+	uint32_t exceptions = pager_lock_check_stack(2048);
 
 	if (!pgt->num_used_entries)
 		goto out;
@@ -1455,15 +1647,14 @@ void tee_pager_release_phys(void *addr, size_t size)
 	if (end <= begin)
 		return;
 
-	area = find_area(&tee_pager_area_head, begin);
-	if (!area ||
-	    area != find_area(&tee_pager_area_head, end - SMALL_PAGE_SIZE))
-		panic();
+	exceptions = pager_lock_check_stack(128);
 
-	exceptions = pager_lock();
-
-	for (va = begin; va < end; va += SMALL_PAGE_SIZE)
+	for (va = begin; va < end; va += SMALL_PAGE_SIZE) {
+		area = find_area(&tee_pager_area_head, va);
+		if (!area)
+			panic();
 		unmaped |= tee_pager_release_one_phys(area, va);
+	}
 
 	if (unmaped)
 		tlbi_mva_range(begin, end - begin, SMALL_PAGE_SIZE);

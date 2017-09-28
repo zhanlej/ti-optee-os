@@ -155,6 +155,57 @@ KEEP_INIT _start
 	.endm
 
 	/*
+	 * set_sctlr : Setup some core configuration in CP15 SCTLR
+	 *
+	 * Setup required by current implementation of the OP-TEE core:
+	 * - Disable data and instruction cache.
+	 * - MMU is expected off and exceptions trapped in ARM mode.
+	 * - Enable or disable alignment checks upon platform configuration.
+	 * - Optinally enable write-implies-execute-never.
+	 * - Optinally enable round robin strategy for cache replacement.
+	 *
+	 * Clobbers r0.
+	 */
+	.macro set_sctlr
+		read_sctlr r0
+		bic	r0, r0, #(SCTLR_M | SCTLR_C)
+		bic	r0, r0, #SCTLR_I
+		bic	r0, r0, #SCTLR_TE
+#if defined(CFG_SCTLR_ALIGNMENT_CHECK)
+		orr	r0, r0, #SCTLR_A
+#else
+		bic	r0, r0, #SCTLR_A
+#endif
+#if defined(CFG_HWSUPP_MEM_PERM_WXN) && defined(CFG_CORE_RWDATA_NOEXEC)
+		orr	r0, r0, #(SCTLR_WXN | SCTLR_UWXN)
+#endif
+#if defined(CFG_ENABLE_SCTLR_RR)
+		orr	r0, r0, #SCTLR_RR
+#endif
+		write_sctlr r0
+	.endm
+
+	/*
+	 * enable_branch_prediction : manually enable branch prediction
+	 *
+	 * This macro targets only ARMv7 architecture and hence conditionned
+	 * by configuration directive CFG_ENABLE_SCTLR_Z. For recent
+	 * architectures, the program flow prediction is automatically enable
+	 * upon MMU enablement.
+	 */
+	.macro enable_branch_prediction
+#if defined(CFG_ENABLE_SCTLR_Z)
+		read_sctlr r0
+		/* Some ARMv7 architectures need btac flush with post synchro */
+		write_bpiall
+		dsb
+		isb
+		orr	r0, r0, #SCTLR_Z
+		write_sctlr r0
+#endif
+	.endm
+
+	/*
 	 * Save boot arguments
 	 * entry r0, saved r4: pagestore
 	 * entry r1, saved r7: (ARMv7 standard bootarg #1)
@@ -186,23 +237,11 @@ UNWIND(	.cantunwind)
 
 	bootargs_entry
 
-	/* Enable alignment checks and disable data and instruction cache. */
-	read_sctlr r0
-#if defined(CFG_SCTLR_ALIGNMENT_CHECK)
-	orr	r0, r0, #SCTLR_A
-#else
-	bic	r0, r0, #SCTLR_A
-#endif
-	bic	r0, r0, #SCTLR_C
-	bic	r0, r0, #SCTLR_I
-#if defined(CFG_HWSUPP_MEM_PERM_WXN) && defined(CFG_CORE_RWDATA_NOEXEC)
-	orr	r0, r0, #(SCTLR_WXN | SCTLR_UWXN)
-#endif
-	write_sctlr r0
-	isb
-
 	/* Early ARM secure MP specific configuration */
 	bl	plat_cpu_reset_early
+
+	set_sctlr
+	isb
 
 	ldr	r0, =_start
 	write_vbar r0
@@ -395,6 +434,8 @@ shadow_stack_access_ok:
 	bl	cpu_mmu_enable_icache
 	bl	cpu_mmu_enable_dcache
 
+	enable_branch_prediction
+
 	mov	r0, r4		/* pageable part address */
 	mov	r1, r5		/* ns-entry address */
 	mov	r2, r6		/* DT address */
@@ -464,16 +505,9 @@ UNWIND(	.cantunwind)
 	mov	r4, r0
 	mov	r5, r1
 	mov	r6, lr
-	read_sctlr r0
-#if defined(CFG_SCTLR_ALIGNMENT_CHECK)
-	orr	r0, r0, #SCTLR_A
-#else
-	bic	r0, r0, #SCTLR_A
-#endif
-#if defined(CFG_HWSUPP_MEM_PERM_WXN) && defined(CFG_CORE_RWDATA_NOEXEC)
-	orr	r0, r0, #(SCTLR_WXN | SCTLR_UWXN)
-#endif
-	write_sctlr r0
+
+	set_sctlr
+	isb
 
 	ldr	r0, =_start
 	write_vbar r0
@@ -485,6 +519,8 @@ UNWIND(	.cantunwind)
 	bl	cpu_mmu_enable
 	bl	cpu_mmu_enable_icache
 	bl	cpu_mmu_enable_dcache
+
+	enable_branch_prediction
 
 	mov	r0, r4
 	mov	r1, r5
@@ -517,6 +553,8 @@ UNWIND(	.cantunwind)
 	bl	cpu_mmu_enable_icache
 	bl	cpu_mmu_enable_dcache
 
+	enable_branch_prediction
+
 	cpu_is_ready
 
 #if defined (CFG_BOOT_SECONDARY_REQUEST)
@@ -536,4 +574,5 @@ UNWIND(	.cantunwind)
 	b	.	/* SMC should not return */
 UNWIND(	.fnend)
 END_FUNC reset_secondary
+KEEP_PAGER reset_secondary
 #endif /* defined(CFG_WITH_ARM_TRUSTED_FW) */

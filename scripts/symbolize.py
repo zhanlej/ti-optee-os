@@ -29,6 +29,7 @@
 
 import argparse
 import glob
+import os
 import re
 import subprocess
 import sys
@@ -38,7 +39,9 @@ TA_INFO_RE = re.compile(':  arch: (?P<arch>\w+)  '
                         'load address: (?P<load_addr>0x[0-9a-f]+)')
 CALL_STACK_RE = re.compile('Call stack:')
 STACK_ADDR_RE = re.compile(r':  (?P<addr>0x[0-9a-f]+)')
-X64_REGS_RE = re.compile(':  x0  [0-9a-f]{16} x1  [0-9a-f]{16}')
+ABORT_ADDR_RE = re.compile('-abort at address (?P<addr>0x[0-9a-f]+)')
+REGION_RE = re.compile('region [0-9]+: va (?P<addr>0x[0-9a-f]+) '
+                       'pa 0x[0-9a-f]+ size (?P<size>0x[0-9a-f]+)')
 
 epilog = '''
 This scripts reads an OP-TEE abort message from stdin and adds debug
@@ -75,7 +78,8 @@ def get_args():
     parser.add_argument('-d', '--dir', action='append', nargs='+',
         help='Search for ELF file in DIR. tee.elf is needed to decode '
              'a TEE Core or pseudo-TA abort, while <TA_uuid>.elf is required '
-             'if a user-mode TA has crashed.')
+             'if a user-mode TA has crashed. For convenience, ELF files '
+             'may also be given.')
     parser.add_argument('-s', '--strip_path',
         help='Strip STRIP_PATH from file paths')
 
@@ -94,32 +98,51 @@ class Symbolizer(object):
         if not elf_or_uuid.endswith('.elf'):
             elf_or_uuid += '.elf'
         for d in self._dirs:
+            if d.endswith(elf_or_uuid) and os.path.isfile(d):
+                return d
             elf = glob.glob(d + '/' + elf_or_uuid)
             if elf:
                 return elf[0]
+
+    def set_arch(self):
+        if self._arch:
+            return
+        if self._bin:
+            p = subprocess.Popen([ 'file', self.get_elf(self._bin) ],
+                                 stdout=subprocess.PIPE)
+            output = p.stdout.readlines()
+            p.terminate()
+            if 'ARM aarch64,' in output[0]:
+                self._arch = 'aarch64-linux-gnu-'
+            elif 'ARM,' in output[0]:
+                self._arch = 'arm-linux-gnueabihf-'
+
+    def arch_prefix(self, cmd):
+        self.set_arch()
+        return self._arch + cmd
 
     def spawn_addr2line(self):
         if not self._addr2line:
             elf = self.get_elf(self._bin)
             if not elf:
                 return
-            if self._arch == 'arm':
-                cmd = 'arm-linux-gnueabihf-addr2line'
-            elif self._arch == 'aarch64':
-                cmd = 'aarch64-linux-gnu-addr2line'
-            else:
+            cmd = self.arch_prefix('addr2line')
+            if not cmd:
                 return
             self._addr2line = subprocess.Popen([cmd, '-f', '-p', '-e', elf],
                                                 stdin = subprocess.PIPE,
                                                 stdout = subprocess.PIPE)
 
-    def resolve(self, addr):
+    def subtract_load_addr(self, addr):
         offs = self._load_addr
-        if int(offs, 0) > int(addr, 0):
-            return '???'
-        reladdr = '0x{:x}'.format(int(addr, 0) - int(offs, 0))
+        if int(offs, 16) > int(addr, 16):
+            return ''
+        return '0x{:x}'.format(int(addr, 16) - int(offs, 16))
+
+    def resolve(self, addr):
+        reladdr = self.subtract_load_addr(addr)
         self.spawn_addr2line()
-        if not self._addr2line:
+        if not reladdr or not self._addr2line:
             return '???'
         try:
             print >> self._addr2line.stdin, reladdr
@@ -128,13 +151,136 @@ class Symbolizer(object):
             ret = '!!!'
         return ret
 
+    def symbol_plus_offset(self, addr):
+        ret = ''
+        prevsize = 0
+        reladdr = self.subtract_load_addr(addr)
+        elf = self.get_elf(self._bin)
+        cmd = self.arch_prefix('nm')
+        if not reladdr or not elf or not cmd:
+            return ''
+        ireladdr = int(reladdr, 16)
+        nm = subprocess.Popen([cmd, '--numeric-sort', '--print-size', elf],
+                               stdin = subprocess.PIPE,
+                               stdout = subprocess.PIPE)
+        for line in iter(nm.stdout.readline, ''):
+            try:
+                addr, size, _, name = line.split()
+            except:
+                # Size is missing
+                addr, _, name = line.split()
+                size = '0'
+            iaddr = int(addr, 16)
+            isize = int(size, 16)
+            if iaddr == ireladdr:
+                ret = name
+                break
+            if iaddr < ireladdr and iaddr + isize >= ireladdr:
+                offs = ireladdr - iaddr
+                ret = name + '+' + str(offs)
+                break
+            if iaddr > ireladdr and prevsize == 0:
+                offs = iaddr + ireladdr
+                ret = prevname + '+' + str(offs)
+                break
+            prevsize = size
+            prevname = name
+        nm.terminate()
+        return ret
+
+    def section_plus_offset(self, addr):
+        ret = ''
+        reladdr = self.subtract_load_addr(addr)
+        elf = self.get_elf(self._bin)
+        cmd = self.arch_prefix('objdump')
+        if not reladdr or not elf or not cmd:
+            return ''
+        iaddr = int(reladdr, 16)
+        objdump = subprocess.Popen([cmd, '--section-headers', elf],
+                                    stdin = subprocess.PIPE,
+                                    stdout = subprocess.PIPE)
+        for line in iter(objdump.stdout.readline, ''):
+            try:
+                idx, name, size, vma, lma, offs, algn = line.split()
+            except:
+                continue;
+            ivma = int(vma, 16)
+            isize = int(size, 16)
+            if ivma == iaddr:
+                ret = name
+                break
+            if ivma < iaddr and ivma + isize >= iaddr:
+                offs = iaddr - ivma
+                ret = name + '+' + str(offs)
+                break
+        objdump.terminate()
+        return ret
+
+    def process_abort(self, line):
+        ret = ''
+        match = re.search(ABORT_ADDR_RE, line)
+        addr = match.group('addr')
+        pre = match.start('addr')
+        post = match.end('addr')
+        sym = self.symbol_plus_offset(addr)
+        sec = self.section_plus_offset(addr)
+        if sym or sec:
+            ret += line[:pre]
+            ret += addr
+            if sym:
+                ret += ' ' + sym
+            if sec:
+                ret += ' ' + sec
+            ret += line[post:]
+        return ret
+
+    # Return all ELF sections with the ALLOC flag
+    def read_sections(self):
+        if self._sections:
+            return
+        elf = self.get_elf(self._bin)
+        cmd = self.arch_prefix('objdump')
+        if not elf or not cmd:
+            return
+        objdump = subprocess.Popen([cmd, '--section-headers', elf],
+                                    stdin = subprocess.PIPE,
+                                    stdout = subprocess.PIPE)
+        for line in iter(objdump.stdout.readline, ''):
+            try:
+                _, name, size, vma, _, _, _ = line.split()
+            except:
+                if 'ALLOC' in line:
+                    self._sections.append([name, int(vma, 16), int(size, 16)])
+
+    def overlaps(self, section, addr, size):
+        sec_addr = section[1]
+        sec_size = section[2]
+        if not size or not sec_size:
+            return False
+        return (addr <= (sec_addr + sec_size - 1)) and ((addr + size - 1) >= sec_addr)
+
+    def sections_in_region(self, addr, size):
+        ret = ''
+        addr = self.subtract_load_addr(addr)
+        if not addr:
+            return ''
+        iaddr = int(addr, 16)
+        isize = int(size, 16)
+        self.read_sections()
+        for s in self._sections:
+            if self.overlaps(s, iaddr, isize):
+                ret += ' ' + s[0]
+        return ret
+
     def reset(self):
         self._call_stack_found = False
         self._load_addr = '0'
         if self._addr2line:
             self._addr2line.terminate()
             self._addr2line = None
-        self._arch = 'arm'
+        self._arch = None
+        self._saved_abort_line = ''
+        self._sections = []
 
     def write(self, line):
             if self._call_stack_found:
@@ -154,21 +300,31 @@ class Symbolizer(object):
                     return
                 else:
                     self.reset()
+            match = re.search(REGION_RE, line)
+            if match:
+                addr = match.group('addr')
+                size = match.group('size')
+                self._out.write(line.strip() +
+                                self.sections_in_region(addr, size) + '\n');
+                return
             match = re.search(CALL_STACK_RE, line)
             if match:
                 self._call_stack_found = True
+                # Here is a good place to resolve the abort address because we
+                # have all the information we need
+                if self._saved_abort_line:
+                    self._out.write(self.process_abort(self._saved_abort_line))
             match = re.search(TA_UUID_RE, line)
             if match:
                 self._bin = match.group('uuid')
             match = re.search(TA_INFO_RE, line)
             if match:
-                self._arch = match.group('arch')
                 self._load_addr = match.group('load_addr')
-            match = re.search(X64_REGS_RE, line)
+            match = re.search(ABORT_ADDR_RE, line)
             if match:
-                # Assume _arch represents the TEE core. If we have a TA dump,
-                # it will be overwritten later
-                self._arch = 'aarch64'
+                # At this point the arch and TA load address are unknown.
+                # Save the line so We can translate the abort address later.
+                self._saved_abort_line = line
             self._out.write(line)
 
     def flush(self):

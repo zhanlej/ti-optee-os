@@ -7,10 +7,13 @@ CFG_LPAE_ADDR_SPACE_SIZE ?= (1ull << 32)
 ifeq ($(CFG_ARM64_core),y)
 CFG_KERN_LINKER_FORMAT ?= elf64-littleaarch64
 CFG_KERN_LINKER_ARCH ?= aarch64
-endif
+else
 ifeq ($(CFG_ARM32_core),y)
 CFG_KERN_LINKER_FORMAT ?= elf32-littlearm
 CFG_KERN_LINKER_ARCH ?= arm
+else
+$(error Error: CFG_ARM64_core or CFG_ARM32_core should be defined)
+endif
 endif
 
 ifeq ($(CFG_TA_FLOAT_SUPPORT),y)
@@ -61,7 +64,7 @@ arm32-platform-cppflags += -DARM32=1 -D__ILP32__=1
 platform-cflags-generic ?= -g -ffunction-sections -fdata-sections -pipe
 platform-aflags-generic ?= -g -pipe
 
-arm32-platform-cflags-no-hard-float ?= -mno-apcs-float -mfloat-abi=soft
+arm32-platform-cflags-no-hard-float ?= -mfloat-abi=soft
 arm32-platform-cflags-hard-float ?= -mfloat-abi=hard -funsafe-math-optimizations
 arm32-platform-cflags-generic ?= -mthumb -mthumb-interwork \
 			-fno-short-enums -fno-common -mno-unaligned-access
@@ -133,6 +136,7 @@ ta-mk-file-export-vars-ta_arm32 += ta_arm32-platform-cppflags
 ta-mk-file-export-vars-ta_arm32 += ta_arm32-platform-cflags
 ta-mk-file-export-vars-ta_arm32 += ta_arm32-platform-aflags
 
+ta-mk-file-export-add-ta_arm32 += CROSS_COMPILE ?= arm-linux-gnueabihf-_nl_
 ta-mk-file-export-add-ta_arm32 += CROSS_COMPILE32 ?= $$(CROSS_COMPILE)_nl_
 ta-mk-file-export-add-ta_arm32 += CROSS_COMPILE_ta_arm32 ?= $$(CROSS_COMPILE32)_nl_
 endif

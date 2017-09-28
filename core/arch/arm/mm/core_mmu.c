@@ -67,7 +67,6 @@ unsigned long default_nsec_shm_paddr;
 
 static struct tee_mmap_region
 	static_memory_map[MAX_MMAP_REGIONS + 1];
-static bool mem_map_inited;
 
 /* Define the platform's memory layout. */
 struct memaccess_area {
@@ -285,8 +284,10 @@ static size_t discovered_nsec_ddr_nelems;
 
 static int cmp_pmem_by_addr(const void *a, const void *b)
 {
-	return ((const struct core_mmu_phys_mem *)a)->addr -
-	       ((const struct core_mmu_phys_mem *)b)->addr;
+	const struct core_mmu_phys_mem *pmem_a = a;
+	const struct core_mmu_phys_mem *pmem_b = b;
+
+	return CMP_TRILEAN(pmem_a->addr, pmem_b->addr);
 }
 
 void core_mmu_set_discovered_nsec_ddr(struct core_mmu_phys_mem *start,
@@ -597,6 +598,8 @@ uint32_t core_mmu_type_to_attr(enum teecore_memtypes t)
 		return attr | TEE_MATTR_SECURE | TEE_MATTR_PR | cached;
 	case MEM_AREA_TEE_RAM_RW:
 		return attr | TEE_MATTR_SECURE | TEE_MATTR_PRW | cached;
+	case MEM_AREA_TEE_COHERENT:
+		return attr | TEE_MATTR_SECURE | TEE_MATTR_PRWX | noncache;
 	case MEM_AREA_TA_RAM:
 		return attr | TEE_MATTR_SECURE | TEE_MATTR_PRW | cached;
 	case MEM_AREA_NSEC_SHM:
@@ -612,6 +615,8 @@ uint32_t core_mmu_type_to_attr(enum teecore_memtypes t)
 	case MEM_AREA_RES_VASPACE:
 	case MEM_AREA_SHM_VASPACE:
 		return 0;
+	case MEM_AREA_PAGER_VASPACE:
+		return TEE_MATTR_SECURE;
 	default:
 		panic("invalid type");
 	}
@@ -650,7 +655,7 @@ static int cmp_mmap_by_lower_va(const void *a, const void *b)
 	const struct tee_mmap_region *mm_a = a;
 	const struct tee_mmap_region *mm_b = b;
 
-	return mm_a->va - mm_b->va;
+	return CMP_TRILEAN(mm_a->va, mm_b->va);
 }
 
 static int __maybe_unused cmp_mmap_by_secure_attr(const void *a, const void *b)
@@ -691,6 +696,39 @@ static void dump_mmap_table(struct tee_mmap_region *memory_map)
 	}
 }
 
+static void add_pager_vaspace(struct tee_mmap_region *mmap, size_t num_elems,
+			      vaddr_t begin, vaddr_t *end, size_t *last)
+{
+	size_t size = CFG_TEE_RAM_VA_SIZE - (*end - begin);
+	size_t n;
+	size_t pos = 0;
+
+	if (!size)
+		return;
+
+	if (*last >= (num_elems - 1)) {
+		EMSG("Out of entries (%zu) in memory map", num_elems);
+		panic();
+	}
+
+	for (n = 0; !core_mmap_is_end_of_table(mmap + n); n++)
+		if (map_is_flat_mapped(mmap + n))
+			pos = n + 1;
+
+	assert(pos <= *last);
+	memmove(mmap + pos + 1, mmap + pos,
+		sizeof(struct tee_mmap_region) * (*last - pos));
+	(*last)++;
+	memset(mmap + pos, 0, sizeof(mmap[0]));
+	mmap[pos].type = MEM_AREA_PAGER_VASPACE;
+	mmap[pos].va = *end;
+	mmap[pos].size = size;
+	mmap[pos].region_size = SMALL_PAGE_SIZE;
+	mmap[pos].attr = core_mmu_type_to_attr(MEM_AREA_PAGER_VASPACE);
+
+	*end += size;
+}
+
 static void init_mem_map(struct tee_mmap_region *memory_map, size_t num_elems)
 {
 	const struct core_mmu_phys_mem *mem;
@@ -698,7 +736,7 @@ static void init_mem_map(struct tee_mmap_region *memory_map, size_t num_elems)
 	size_t last = 0;
 	size_t __maybe_unused count = 0;
 	vaddr_t va;
-	vaddr_t __maybe_unused end;
+	vaddr_t end;
 	bool __maybe_unused va_is_secure = true; /* any init value fits */
 
 	for (mem = &__start_phys_mem_map_section;
@@ -736,7 +774,7 @@ static void init_mem_map(struct tee_mmap_region *memory_map, size_t num_elems)
 		     RES_VASPACE_SIZE, &last);
 
 	add_va_space(memory_map, num_elems, MEM_AREA_SHM_VASPACE,
-		     RES_VASPACE_SIZE, &last);
+		     SHM_VASPACE_SIZE, &last);
 
 	memory_map[last].type = MEM_AREA_END;
 
@@ -782,8 +820,9 @@ static void init_mem_map(struct tee_mmap_region *memory_map, size_t num_elems)
 
 	/*
 	 * Map flat mapped addresses first.
-	 * 'va' will store the lower address of the flat-mapped areas to later
-	 * setup the virtual mapping of the non flat-mapped areas.
+	 * 'va' (resp. 'end') will store the lower (reps. higher) address of
+	 * the flat-mapped areas to later setup the virtual mapping of the non
+	 * flat-mapped areas.
 	 */
 	va = (vaddr_t)~0UL;
 	end = 0;
@@ -796,13 +835,17 @@ static void init_mem_map(struct tee_mmap_region *memory_map, size_t num_elems)
 		va = MIN(va, ROUNDDOWN(map->va, map->region_size));
 		end = MAX(end, ROUNDUP(map->va + map->size, map->region_size));
 	}
-	assert(va >= CFG_TEE_RAM_START);
-	assert(end <= CFG_TEE_RAM_START + CFG_TEE_RAM_VA_SIZE);
+	assert(va >= TEE_RAM_VA_START);
+	assert(end <= TEE_RAM_VA_START + CFG_TEE_RAM_VA_SIZE);
+
+	add_pager_vaspace(memory_map, num_elems, va, &end, &last);
+
+	assert(!((va | end) & SMALL_PAGE_MASK));
 
 	if (core_mmu_place_tee_ram_at_top(va)) {
 		/* Map non-flat mapped addresses below flat mapped addresses */
 		for (map = memory_map; !core_mmap_is_end_of_table(map); map++) {
-			if (map_is_flat_mapped(map))
+			if (map->va)
 				continue;
 
 #if !defined(CFG_WITH_LPAE)
@@ -822,9 +865,9 @@ static void init_mem_map(struct tee_mmap_region *memory_map, size_t num_elems)
 		}
 	} else {
 		/* Map non-flat mapped addresses above flat mapped addresses */
-		va = ROUNDUP(va + CFG_TEE_RAM_VA_SIZE, CORE_MMU_PGDIR_SIZE);
+		va = end;
 		for (map = memory_map; !core_mmap_is_end_of_table(map); map++) {
-			if (map_is_flat_mapped(map))
+			if (map->va)
 				continue;
 
 #if !defined(CFG_WITH_LPAE)
@@ -868,8 +911,7 @@ void core_init_mmu_map(void)
 			panic("Invalid memory access config: sec/nsec");
 	}
 
-	if (!mem_map_inited)
-		init_mem_map(static_memory_map, ARRAY_SIZE(static_memory_map));
+	init_mem_map(static_memory_map, ARRAY_SIZE(static_memory_map));
 
 	map = static_memory_map;
 	while (!core_mmap_is_end_of_table(map)) {
@@ -889,12 +931,14 @@ void core_init_mmu_map(void)
 			if (!pbuf_is_inside(nsec_shared, map->pa, map->size))
 				panic("NS_SHM can't fit in nsec_shared");
 			break;
+		case MEM_AREA_TEE_COHERENT:
 		case MEM_AREA_IO_SEC:
 		case MEM_AREA_IO_NSEC:
 		case MEM_AREA_RAM_SEC:
 		case MEM_AREA_RAM_NSEC:
 		case MEM_AREA_RES_VASPACE:
 		case MEM_AREA_SHM_VASPACE:
+		case MEM_AREA_PAGER_VASPACE:
 			break;
 		default:
 			EMSG("Uhandled memtype %d", map->type);
@@ -1293,6 +1337,13 @@ TEE_Result core_mmu_map_pages(vaddr_t vstart, paddr_t *pages, size_t num_pages,
 		vaddr += SMALL_PAGE_SIZE;
 	}
 
+	/*
+	 * Make sure all the changes to translation tables are visible
+	 * before returning. TLB doesn't need to be invalidated as we are
+	 * guaranteed that there's no valid mapping in this range.
+	 */
+	dsb_ishst();
+
 	return TEE_SUCCESS;
 err:
 	if (i)
@@ -1428,6 +1479,10 @@ bool core_mmu_add_mapping(enum teecore_memtypes type, paddr_t addr, size_t len)
 	map->pa = p;
 
 	set_region(&tbl_info, map);
+
+	/* Make sure the new entry is visible before continuing. */
+	dsb_ishst();
+
 	return true;
 }
 
@@ -1481,6 +1536,7 @@ static void check_pa_matches_va(void *va, paddr_t pa)
 	TEE_Result res;
 	vaddr_t v = (vaddr_t)va;
 	paddr_t p = 0;
+	struct core_mmu_table_info ti __maybe_unused;
 
 	if (core_mmu_user_va_range_is_defined()) {
 		vaddr_t user_va_base;
@@ -1505,14 +1561,13 @@ static void check_pa_matches_va(void *va, paddr_t pa)
 		}
 	}
 #ifdef CFG_WITH_PAGER
-	if (v >= CFG_TEE_LOAD_ADDR && v < get_linear_map_end()) {
+	if (v >= TEE_TEXT_VA_START && v < get_linear_map_end()) {
 		if (v != pa)
 			panic("issue in linear address space");
 		return;
 	}
-	if (v >= (CFG_TEE_LOAD_ADDR & ~CORE_MMU_PGDIR_MASK) &&
-	    v <= (CFG_TEE_LOAD_ADDR | CORE_MMU_PGDIR_MASK)) {
-		struct core_mmu_table_info *ti = &tee_pager_tbl_info;
+
+	if (tee_pager_get_table_info(v, &ti)) {
 		uint32_t a;
 
 		/*
@@ -1521,9 +1576,9 @@ static void check_pa_matches_va(void *va, paddr_t pa)
 		 * changes all the time. But some ranges are safe,
 		 * rw-locked areas when the page is populated for instance.
 		 */
-		core_mmu_get_entry(ti, core_mmu_va2idx(ti, v), &p, &a);
+		core_mmu_get_entry(&ti, core_mmu_va2idx(&ti, v), &p, &a);
 		if (a & TEE_MATTR_VALID_BLOCK) {
-			paddr_t mask = ((1 << ti->shift) - 1);
+			paddr_t mask = ((1 << ti.shift) - 1);
 
 			p |= v & mask;
 			if (pa != p)
@@ -1589,34 +1644,9 @@ static void *phys_to_virt_ta_vaspace(paddr_t pa)
 #ifdef CFG_WITH_PAGER
 static void *phys_to_virt_tee_ram(paddr_t pa)
 {
-	struct core_mmu_table_info *ti = &tee_pager_tbl_info;
-	unsigned idx;
-	unsigned end_idx;
-	uint32_t a;
-	paddr_t p;
-
 	if (pa >= CFG_TEE_LOAD_ADDR && pa < get_linear_map_end())
 		return (void *)(vaddr_t)pa;
-
-	end_idx = core_mmu_va2idx(ti, CFG_TEE_RAM_START +
-				      CFG_TEE_RAM_VA_SIZE);
-	/* Most addresses are mapped lineary, try that first if possible. */
-	idx = core_mmu_va2idx(ti, pa);
-	if (idx >= core_mmu_va2idx(ti, CFG_TEE_RAM_START) &&
-	    idx < end_idx) {
-		core_mmu_get_entry(ti, idx, &p, &a);
-		if ((a & TEE_MATTR_VALID_BLOCK) && p == pa)
-			return (void *)core_mmu_idx2va(ti, idx);
-	}
-
-	for (idx = core_mmu_va2idx(ti, CFG_TEE_RAM_START);
-	     idx < end_idx; idx++) {
-		core_mmu_get_entry(ti, idx, &p, &a);
-		if ((a & TEE_MATTR_VALID_BLOCK) && p == pa)
-			return (void *)core_mmu_idx2va(ti, idx);
-	}
-
-	return NULL;
+	return tee_pager_phys_to_virt(pa);
 }
 #else
 static void *phys_to_virt_tee_ram(paddr_t pa)

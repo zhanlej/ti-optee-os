@@ -385,11 +385,22 @@ static TEE_Result mobj_reg_shm_get_cattr(struct mobj *mobj __unused,
 	return TEE_SUCCESS;
 }
 
+static bool mobj_reg_shm_matches(struct mobj *mobj, enum buf_is_attr attr);
+
 static const struct mobj_ops mobj_reg_shm_ops __rodata_unpaged = {
 	.get_pa = mobj_reg_shm_get_pa,
 	.get_cattr = mobj_reg_shm_get_cattr,
+	.matches = mobj_reg_shm_matches,
 	.free = mobj_reg_shm_free,
 };
+
+static bool mobj_reg_shm_matches(struct mobj *mobj __maybe_unused,
+				   enum buf_is_attr attr)
+{
+	assert(mobj->ops == &mobj_reg_shm_ops);
+
+	return attr == CORE_MEM_NON_SEC || attr == CORE_MEM_REG_SHM;
+}
 
 static struct mobj_reg_shm *to_mobj_reg_shm(struct mobj *mobj)
 {
@@ -691,8 +702,10 @@ struct mobj *mobj_shm_alloc(paddr_t pa, size_t size)
  */
 
 static void mobj_paged_free(struct mobj *mobj);
+static bool mobj_paged_matches(struct mobj *mobj, enum buf_is_attr attr);
 
 static const struct mobj_ops mobj_paged_ops __rodata_unpaged = {
+	.matches = mobj_paged_matches,
 	.free = mobj_paged_free,
 };
 
@@ -700,6 +713,14 @@ static void mobj_paged_free(struct mobj *mobj)
 {
 	assert(mobj->ops == &mobj_paged_ops);
 	free(mobj);
+}
+
+static bool mobj_paged_matches(struct mobj *mobj __maybe_unused,
+				 enum buf_is_attr attr)
+{
+	assert(mobj->ops == &mobj_paged_ops);
+
+	return attr == CORE_MEM_SEC || attr == CORE_MEM_TEE_RAM;
 }
 
 struct mobj *mobj_paged_alloc(size_t size)

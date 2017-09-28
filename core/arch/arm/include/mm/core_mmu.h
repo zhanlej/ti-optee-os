@@ -47,8 +47,10 @@
  */
 #ifdef CFG_WITH_LPAE
 #define CORE_MMU_PGDIR_SHIFT	21
+#define CORE_MMU_PGDIR_LEVEL	3
 #else
 #define CORE_MMU_PGDIR_SHIFT	20
+#define CORE_MMU_PGDIR_LEVEL	2
 #endif
 #define CORE_MMU_PGDIR_SIZE		(1 << CORE_MMU_PGDIR_SHIFT)
 #define CORE_MMU_PGDIR_MASK		(CORE_MMU_PGDIR_SIZE - 1)
@@ -71,6 +73,18 @@
 #ifndef CFG_TEE_RAM_VA_SIZE
 #define CFG_TEE_RAM_VA_SIZE		CORE_MMU_PGDIR_SIZE
 #endif
+
+/*
+ * TEE_RAM_VA_START:            The start virtual address of the TEE RAM
+ * TEE_TEXT_VA_START:           The start virtual address of the OP-TEE text
+ */
+
+/*
+ * Identify mapping constraint: virtual base address is the physical start addr.
+ */
+#define TEE_RAM_VA_START		CFG_TEE_RAM_START
+#define TEE_TEXT_VA_START		(TEE_RAM_VA_START + \
+				(CFG_TEE_LOAD_ADDR - CFG_TEE_RAM_START))
 
 #ifndef STACK_ALIGNMENT
 #define STACK_ALIGNMENT			(sizeof(long) * 2)
@@ -111,6 +125,7 @@ enum teecore_memtypes {
 	MEM_AREA_RES_VASPACE,
 	MEM_AREA_SHM_VASPACE,
 	MEM_AREA_TA_VASPACE,
+	MEM_AREA_PAGER_VASPACE,
 	MEM_AREA_SDP_MEM,
 	MEM_AREA_MAXTYPE
 };
@@ -133,6 +148,7 @@ static inline const char *teecore_memtype_name(enum teecore_memtypes type)
 		[MEM_AREA_RES_VASPACE] = "RES_VASPACE",
 		[MEM_AREA_SHM_VASPACE] = "SHM_VASPACE",
 		[MEM_AREA_TA_VASPACE] = "TA_VASPACE",
+		[MEM_AREA_PAGER_VASPACE] = "PAGER_VASPACE",
 		[MEM_AREA_SDP_MEM] = "SDP_MEM",
 	};
 
@@ -480,6 +496,9 @@ static inline TEE_Result cache_op_outer(enum cache_op op __unused,
 
 /* Check cpu mmu enabled or not */
 bool cpu_mmu_enabled(void);
+
+/* Do section mapping, not support on LPAE */
+void map_memarea_sections(const struct tee_mmap_region *mm, uint32_t *ttb);
 
 /*
  * Check if platform defines nsec DDR range(s).

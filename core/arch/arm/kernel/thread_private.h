@@ -117,30 +117,6 @@ struct thread_ctx {
 	struct mutex_head mutexes;
 	struct thread_specific_data tsd;
 };
-
-#ifdef ARM64
-/*
- * struct thread_core_local need to have alignment suitable for a stack
- * pointer since SP_EL1 points to this
- */
-#define THREAD_CORE_LOCAL_ALIGNED __aligned(16)
-#else
-#define THREAD_CORE_LOCAL_ALIGNED
-#endif
-
-struct thread_core_local {
-	vaddr_t tmp_stack_va_end;
-	int curr_thread;
-#ifdef ARM64
-	uint32_t flags;
-	vaddr_t abt_stack_va_end;
-	uint64_t x[4];
-#endif
-#ifdef CFG_TEE_CORE_DEBUG
-	unsigned int locked_count; /* Number of spinlocks held */
-#endif
-} THREAD_CORE_LOCAL_ALIGNED;
-
 #endif /*ASM*/
 
 #ifdef ARM64
@@ -150,6 +126,7 @@ struct thread_core_local {
 #else
 #define THREAD_VFP_STATE_SIZE				0
 #endif
+#endif /*ARM64*/
 
 /* Describes the flags field of struct thread_core_local */
 #define THREAD_CLF_SAVED_SHIFT			4
@@ -164,8 +141,6 @@ struct thread_core_local {
 #define THREAD_CLF_ABORT			(1 << THREAD_CLF_ABORT_SHIFT)
 #define THREAD_CLF_IRQ				(1 << THREAD_CLF_IRQ_SHIFT)
 #define THREAD_CLF_FIQ				(1 << THREAD_CLF_FIQ_SHIFT)
-
-#endif /*ARM64*/
 
 #ifndef ASM
 extern const void *stack_tmp_export;
@@ -187,8 +162,6 @@ void thread_init_vbar(void);
 
 /* Handles a stdcall, r0-r7 holds the parameters */
 void thread_std_smc_entry(void);
-
-struct thread_core_local *thread_get_core_local(void);
 
 /*
  * Resumes execution of currently active thread by restoring context and
@@ -230,6 +203,9 @@ struct thread_ctx_regs *thread_get_ctx_regs(void);
 #ifdef ARM32
 /* Sets sp for abort mode */
 void thread_set_abt_sp(vaddr_t sp);
+
+/* Sets sp for undefined mode */
+void thread_set_und_sp(vaddr_t sp);
 
 /* Sets sp for irq mode */
 void thread_set_irq_sp(vaddr_t sp);
