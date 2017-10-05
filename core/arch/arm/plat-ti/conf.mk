@@ -5,6 +5,12 @@ CFG_WITH_STATS ?= y
 CFG_WITH_SOFTWARE_PRNG ?= n
 CFG_SECURE_DATA_PATH ?= y
 
+ifeq ($(CFG_SECURE_DATA_PATH),y)
+CFG_TEE_SDP_MEM_SIZE ?= 0x00400000
+else
+CFG_TEE_SDP_MEM_SIZE ?= 0x0
+endif
+
 $(call force,CFG_8250_UART,y)
 $(call force,CFG_ARM32_core,y)
 $(call force,CFG_GENERIC_BOOT,y)
@@ -14,6 +20,7 @@ CFG_WITH_SOFTWARE_PRNG = y
 $(call force,CFG_NO_SMP,y)
 $(call force,CFG_PL310,y)
 $(call force,CFG_PL310_LOCKED,y)
+$(call force,CFG_PM_ARM32,y)
 $(call force,CFG_SECURE_TIME_SOURCE_REE,y)
 include core/arch/arm/cpu/cortex-a9.mk
 else

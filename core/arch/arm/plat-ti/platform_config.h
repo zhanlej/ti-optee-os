@@ -154,21 +154,11 @@
 #endif /* CFG_WITH_PAGER */
 
 #if defined(CFG_SECURE_DATA_PATH)
-
-#if !defined(CFG_TEE_SDP_MEM_SIZE)
-#define CFG_TEE_SDP_MEM_SIZE    0x00400000
-#endif
-
-/* default locate SDP memory at the end of TZDRAM */
-#if !defined(CFG_TEE_SDP_MEM_BASE)
+/* Locate SDP memory at the end of TZDRAM */
 #define CFG_TEE_SDP_MEM_BASE	(TZDRAM_BASE + \
 				TZDRAM_SIZE - \
 				CFG_TEE_SDP_MEM_SIZE)
 #endif
-
-#else /* CFG_SECURE_DATA_PATH */
-#define CFG_TEE_SDP_MEM_SIZE    0
-#endif /* CFG_SECURE_DATA_PATH */
 
 #define CFG_TA_RAM_START	ROUNDUP((TZDRAM_BASE + CFG_TEE_RAM_VA_SIZE), \
 					CORE_MMU_DEVICE_SIZE)
