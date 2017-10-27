@@ -46,6 +46,7 @@ struct mobj_ops {
 	void *(*get_va)(struct mobj *mobj, size_t offs);
 	TEE_Result (*get_pa)(struct mobj *mobj, size_t offs, size_t granule,
 			     paddr_t *pa);
+	size_t (*get_phys_offs)(struct mobj *mobj, size_t granule);
 	TEE_Result (*get_cattr)(struct mobj *mobj, uint32_t *cattr);
 	bool (*matches)(struct mobj *mobj, enum buf_is_attr attr);
 	void (*free)(struct mobj *mobj);
@@ -69,6 +70,13 @@ static inline TEE_Result mobj_get_pa(struct mobj *mobj, size_t offs,
 	if (mobj && mobj->ops && mobj->ops->get_pa)
 		return mobj->ops->get_pa(mobj, offs, granule, pa);
 	return TEE_ERROR_GENERIC;
+}
+
+static inline size_t mobj_get_phys_offs(struct mobj *mobj, size_t granule)
+{
+	if (mobj && mobj->ops && mobj->ops->get_phys_offs)
+		return mobj->ops->get_phys_offs(mobj, granule);
+	return 0;
 }
 
 static inline TEE_Result mobj_get_cattr(struct mobj *mobj, uint32_t *cattr)
@@ -131,6 +139,9 @@ struct mobj *mobj_reg_shm_alloc(paddr_t *pages, size_t num_pages,
 				paddr_t page_offset, uint64_t cookie);
 
 struct mobj *mobj_reg_shm_find_by_cookie(uint64_t cookie);
+
+TEE_Result mobj_reg_shm_map(struct mobj *mobj);
+TEE_Result mobj_reg_shm_unmap(struct mobj *mobj);
 
 /*
  * mapped_shm represents registered shared buffer

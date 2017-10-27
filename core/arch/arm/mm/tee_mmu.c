@@ -75,6 +75,7 @@ static TEE_Result tee_mmu_umap_add_param(struct tee_mmu_info *mmu,
 	uint32_t attr = TEE_MMU_UDATA_ATTR;
 	size_t nsz;
 	size_t noffs;
+	size_t phys_offs;
 
 	if (!mobj_is_paged(mem->mobj)) {
 		uint32_t cattr;
@@ -102,10 +103,13 @@ static TEE_Result tee_mmu_umap_add_param(struct tee_mmu_info *mmu,
 		return TEE_ERROR_EXCESS_DATA;
 	}
 
+	phys_offs = mobj_get_phys_offs(mem->mobj, CORE_MMU_USER_PARAM_SIZE);
+
 	mmu->regions[n].mobj = mem->mobj;
-	mmu->regions[n].offset = ROUNDDOWN(mem->offs, CORE_MMU_USER_PARAM_SIZE);
-	mmu->regions[n].size = ROUNDUP(mem->offs - mmu->regions[n].offset +
-				       mem->size,
+	mmu->regions[n].offset = ROUNDDOWN(phys_offs + mem->offs,
+					   CORE_MMU_USER_PARAM_SIZE);
+	mmu->regions[n].size = ROUNDUP(phys_offs + mem->offs -
+				       mmu->regions[n].offset + mem->size,
 				       CORE_MMU_USER_PARAM_SIZE);
 	mmu->regions[n].attr = attr;
 
@@ -411,6 +415,7 @@ static TEE_Result param_mem_to_user_va(struct user_ta_ctx *utc,
 	for (n = TEE_MMU_UMAP_PARAM_IDX; n < TEE_MMU_UMAP_MAX_ENTRIES; n++) {
 		struct tee_ta_region *region = utc->mmu->regions + n;
 		vaddr_t va;
+		size_t phys_offs;
 
 		if (mem->mobj != region->mobj)
 			continue;
@@ -418,7 +423,9 @@ static TEE_Result param_mem_to_user_va(struct user_ta_ctx *utc,
 			continue;
 		if (mem->offs >= (region->offset + region->size))
 			continue;
-		va = region->va + mem->offs - region->offset;
+		phys_offs = mobj_get_phys_offs(mem->mobj,
+					       CORE_MMU_USER_PARAM_SIZE);
+		va = region->va + mem->offs + phys_offs - region->offset;
 		*user_va = (void *)va;
 		return TEE_SUCCESS;
 	}
@@ -659,9 +666,13 @@ TEE_Result tee_mmu_vbuf_to_mobj_offs(const struct user_ta_ctx *utc,
 			continue;
 		if (core_is_buffer_inside(va, size, utc->mmu->regions[n].va,
 					  utc->mmu->regions[n].size)) {
+			size_t poffs;
+
+			poffs = mobj_get_phys_offs(utc->mmu->regions[n].mobj,
+						   CORE_MMU_USER_PARAM_SIZE);
 			*mobj = utc->mmu->regions[n].mobj;
 			*offs = (vaddr_t)va - utc->mmu->regions[n].va +
-				utc->mmu->regions[n].offset;
+				utc->mmu->regions[n].offset - poffs;
 			return TEE_SUCCESS;
 		}
 	}
@@ -675,25 +686,44 @@ static TEE_Result tee_mmu_user_va2pa_attr(const struct user_ta_ctx *utc,
 	size_t n;
 
 	for (n = 0; n < ARRAY_SIZE(utc->mmu->regions); n++) {
-		if (core_is_buffer_inside(ua, 1, utc->mmu->regions[n].va,
-					  utc->mmu->regions[n].size)) {
-			if (pa) {
-				TEE_Result res;
-				paddr_t p;
+		struct tee_ta_region *region = &utc->mmu->regions[n];
 
-				res = mobj_get_pa(utc->mmu->regions[n].mobj,
-						  utc->mmu->regions[n].offset,
-						  0, &p);
-				if (res != TEE_SUCCESS)
-					return res;
+		if (!core_is_buffer_inside(ua, 1, region->va, region->size))
+			continue;
 
-				*pa = (paddr_t)ua - utc->mmu->regions[n].va + p;
-			}
-			if (attr)
-				*attr = utc->mmu->regions[n].attr;
-			return TEE_SUCCESS;
+		if (pa) {
+			TEE_Result res;
+			paddr_t p;
+			size_t offset;
+			size_t granule;
+
+			/*
+			 * mobj and input user address may each include
+			 * a specific offset-in-granule position.
+			 * Drop both to get target physical page base
+			 * address then apply only user address
+			 * offset-in-granule.
+			 * Mapping lowest granule is the small page.
+			 */
+			granule = MAX(region->mobj->phys_granule,
+				      (size_t)SMALL_PAGE_SIZE);
+			assert(!granule || IS_POWER_OF_TWO(granule));
+
+			offset = region->offset +
+				 ROUNDDOWN((vaddr_t)ua - region->va, granule);
+
+			res = mobj_get_pa(region->mobj, offset, granule, &p);
+			if (res != TEE_SUCCESS)
+				return res;
+
+			*pa = p | ((vaddr_t)ua & (granule - 1));
 		}
+		if (attr)
+			*attr = utc->mmu->regions[n].attr;
+
+		return TEE_SUCCESS;
 	}
+
 	return TEE_ERROR_ACCESS_DENIED;
 }
 
@@ -712,18 +742,43 @@ TEE_Result tee_mmu_user_pa2va_helper(const struct user_ta_ctx *utc,
 	size_t n;
 
 	for (n = 0; n < ARRAY_SIZE(utc->mmu->regions); n++) {
-		if (!utc->mmu->regions[n].mobj)
+		struct tee_ta_region *region = &utc->mmu->regions[n];
+		size_t granule;
+		size_t size;
+		size_t ofs;
+
+		/* pa2va is expected only for memory tracked through mobj */
+		if (!region->mobj)
 			continue;
 
-		res = mobj_get_pa(utc->mmu->regions[n].mobj,
-				  utc->mmu->regions[n].offset, 0, &p);
-		if (res != TEE_SUCCESS)
-			return res;
+		/* Physically granulated memory object must be scanned */
+		granule = region->mobj->phys_granule;
+		assert(!granule || IS_POWER_OF_TWO(granule));
 
-		if (core_is_buffer_inside(pa, 1, p,
-					  utc->mmu->regions[n].size)) {
-			*va = (void *)(pa - p + utc->mmu->regions[n].va);
-			return TEE_SUCCESS;
+		for (ofs = region->offset; ofs < region->size; ofs += size) {
+
+			if (granule) {
+				/* From current offset to buffer/granule end */
+				size = granule - (ofs & (granule - 1));
+
+				if (size > (region->size - ofs))
+					size = region->size - ofs;
+			} else
+				size = region->size;
+
+			res = mobj_get_pa(region->mobj, ofs, granule, &p);
+			if (res != TEE_SUCCESS)
+				return res;
+
+			if (core_is_buffer_inside(pa, 1, p, size)) {
+				/* Remove region offset (mobj phys offset) */
+				ofs -= region->offset;
+				/* Get offset-in-granule */
+				p = pa - p;
+
+				*va = (void *)(region->va + ofs + (vaddr_t)p);
+				return TEE_SUCCESS;
+			}
 		}
 	}
 

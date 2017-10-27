@@ -30,6 +30,13 @@
 #include <compiler.h>
 #include <stdint.h>
 
+#define SIZE_4K	UINTPTR_C(0x1000)
+#define SIZE_1M	UINTPTR_C(0x100000)
+#define SIZE_2M	UINTPTR_C(0x200000)
+#define SIZE_4M	UINTPTR_C(0x400000)
+#define SIZE_8M	UINTPTR_C(0x800000)
+#define SIZE_2G	UINTPTR_C(0x80000000)
+
 #ifndef MAX
 #define MAX(a, b) \
 	(__extension__({ __typeof__(a) _a = (a); \
@@ -44,12 +51,17 @@
 
 #define ARRAY_SIZE(x) (sizeof(x) / sizeof((x)[0]))
 
+#ifndef ASM
 /* Round up the even multiple of size, size has to be a multiple of 2 */
 #define ROUNDUP(v, size) (((v) + ((__typeof__(v))(size) - 1)) & \
 			  ~((__typeof__(v))(size) - 1))
 
 /* Round down the even multiple of size, size has to be a multiple of 2 */
 #define ROUNDDOWN(v, size) ((v) & ~((__typeof__(v))(size) - 1))
+#else
+#define ROUNDUP(x, y)			((((x) + (y) - 1) / (y)) * (y))
+#define ROUNDDOWN(x, y)		(((x) / (y)) * (y))
+#endif
 
 /* x has to be of an unsigned type */
 #define IS_POWER_OF_TWO(x) (((x) != 0) && (((x) & (~(x) + 1)) == (x)))

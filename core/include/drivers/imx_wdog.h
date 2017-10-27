@@ -1,6 +1,5 @@
 /*
- * Copyright (c) 2015, Linaro Limited
- * All rights reserved.
+ * Copyright 2017 NXP
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are met:
@@ -25,29 +24,21 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include <tee_syscall_numbers.h>
-#include <asm.S>
+#ifndef __IMX_WDOG_H
+#define __IMX_WDOG_H
 
-        .section .text
+/* i.MX6/7D */
+#define WDT_WCR		0x00
+#define WDT_WCR_WDA	BIT(5)
+#define WDT_WCR_SRS	BIT(4)
+#define WDT_WCR_WRE	BIT(3)
+#define WDT_WCR_WDE	BIT(2)
+#define WDT_WCR_WDZST	BIT(0)
 
-        .macro UTEE_SYSCALL name, scn, num_args
-	FUNC \name , :
+#define WDT_WSR		0x02
+#define WDT_SEQ1	0x5555
+#define WDT_SEQ2	0xAAAA
 
-	.if \num_args > TEE_SVC_MAX_ARGS || \num_args > 8
-	.error "Too many arguments for syscall"
-	.endif
-        mov     x8, #(\scn)
-        svc #0
-        ret
-        END_FUNC \name
-        .endm
-
-	FUNC utee_panic, :
-	stp	x29, x30, [sp, #-16]!
-	mov	x1, sp
-	bl	__utee_panic
-	/* Not reached */
-	END_FUNC utee_panic
-
-#include "utee_syscalls_asm.S"
-
+/* Exposed for psci reset */
+void imx_wdog_restart(void);
+#endif

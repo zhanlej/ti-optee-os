@@ -4,6 +4,8 @@ CFG_LTC_OPTEE_THREAD ?= y
 CFG_CORE_TZSRAM_EMUL_SIZE ?= 458752
 CFG_LPAE_ADDR_SPACE_SIZE ?= (1ull << 32)
 
+CFG_MMAP_REGIONS ?= 13
+
 ifeq ($(CFG_ARM64_core),y)
 CFG_KERN_LINKER_FORMAT ?= elf64-littleaarch64
 CFG_KERN_LINKER_ARCH ?= aarch64
@@ -41,6 +43,10 @@ ifeq ($(CFG_WITH_PAGER),y)
 ifeq ($(CFG_CORE_SANITIZE_KADDRESS),y)
 $(error Error: CFG_CORE_SANITIZE_KADDRESS not compatible with CFG_WITH_PAGER)
 endif
+endif
+
+ifeq ($(CFG_CORE_LARGE_PHYS_ADDR),y)
+$(call force,CFG_WITH_LPAE,y)
 endif
 
 ifeq ($(CFG_ARM32_core),y)
@@ -128,6 +134,7 @@ endif
 ifeq ($(CFG_UNWIND),y)
 ta_arm32-platform-cflags += -funwind-tables
 endif
+ta_arm32-platform-aflags += $(platform-aflags-generic)
 ta_arm32-platform-aflags += $(platform-aflags-debug-info)
 ta_arm32-platform-aflags += $(arm32-platform-aflags)
 
@@ -156,6 +163,7 @@ ta_arm64-platform-cflags += $(arm64-platform-cflags-hard-float)
 else
 ta_arm64-platform-cflags += $(arm64-platform-cflags-no-hard-float)
 endif
+ta_arm64-platform-aflags += $(platform-aflags-generic)
 ta_arm64-platform-aflags += $(platform-aflags-debug-info)
 ta_arm64-platform-aflags += $(arm64-platform-aflags)
 

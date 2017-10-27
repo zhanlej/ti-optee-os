@@ -163,17 +163,17 @@ static TEE_Result tee_ltc_prng_init(struct tee_ltc_prng *prng)
 		if (res != CRYPT_OK)
 			return TEE_ERROR_BAD_STATE;
 
+		plat_prng_add_jitter_entropy_norpc();
+
 		res = prng_descriptor[prng_index]->ready(&prng->state);
 		if (res != CRYPT_OK)
 			return TEE_ERROR_BAD_STATE;
+
+		prng->index = prng_index;
 		prng->inited = true;
 	}
 
-	prng->index = prng_index;
-
-	plat_prng_add_jitter_entropy_norpc();
-
-	return  TEE_SUCCESS;
+	return TEE_SUCCESS;
 }
 
 /*
@@ -2926,6 +2926,30 @@ static TEE_Result prng_read(void *buf, size_t blen)
 	return TEE_SUCCESS;
 }
 
+/* Called as a result of rng_generate() below */
+static TEE_Result _tee_ltc_prng_add_entropy(
+	const uint8_t *inbuf __maybe_unused, size_t len __maybe_unused)
+{
+#if defined(CFG_WITH_SOFTWARE_PRNG)
+	int err;
+#ifdef _CFG_CRYPTO_WITH_FORTUNA_PRNG
+        int (*add_entropy)(const unsigned char *, unsigned long,
+                           prng_state *) = fortuna_add_entropy;
+#else
+        int (*add_entropy)(const unsigned char *, unsigned long,
+                           prng_state *) = rc4_add_entropy;
+#endif
+
+	err = add_entropy(inbuf, len, &_tee_ltc_prng.state);
+	if (err != CRYPT_OK)
+		return TEE_ERROR_BAD_STATE;
+
+	return TEE_SUCCESS;
+#else
+	return TEE_ERROR_BAD_STATE;
+#endif
+}
+
 static TEE_Result prng_add_entropy(const uint8_t *inbuf, size_t len)
 {
 	int err;
@@ -2934,7 +2958,7 @@ static TEE_Result prng_add_entropy(const uint8_t *inbuf, size_t len)
 	err = prng_is_valid(prng->index);
 
 	if (err != CRYPT_OK)
-		return TEE_ERROR_BAD_STATE;
+		return _tee_ltc_prng_add_entropy(inbuf, len);
 
 	err = prng_descriptor[prng->index]->add_entropy(
 			inbuf, len, &prng->state);
@@ -3101,6 +3125,7 @@ TEE_Result rng_generate(void *buffer, size_t len)
 	if (!_tee_ltc_prng.inited) {
 		if (start(&_tee_ltc_prng.state) != CRYPT_OK)
 			return TEE_ERROR_BAD_STATE;
+		plat_prng_add_jitter_entropy_norpc();
 		if (ready(&_tee_ltc_prng.state) != CRYPT_OK)
 			return TEE_ERROR_BAD_STATE;
 		_tee_ltc_prng.inited = true;

@@ -508,16 +508,13 @@ bool core_mmu_find_table(vaddr_t va, unsigned max_level,
 	return true;
 }
 
-bool core_mmu_divide_block(struct core_mmu_table_info *tbl_info,
-			   unsigned int idx)
+bool core_mmu_prepare_small_page_mapping(struct core_mmu_table_info *tbl_info,
+					 unsigned int idx, bool secure)
 {
 	uint32_t *new_table;
 	uint32_t *entry;
 	uint32_t new_table_desc;
-	paddr_t paddr;
 	uint32_t attr;
-	int i;
-	bool flush_tlb;
 
 	if (tbl_info->level != 1)
 		return false;
@@ -525,37 +522,31 @@ bool core_mmu_divide_block(struct core_mmu_table_info *tbl_info,
 	if (idx >= NUM_L1_ENTRIES)
 		return false;
 
+	entry = (uint32_t *)tbl_info->table + idx;
+	if (*entry && get_desc_type(1, *entry) != DESC_TYPE_SECTION)
+		return false;
+
+	attr = desc_to_mattr(1, *entry);
+
+	if (attr) {
+		/* If pgdir maps something, check the secure attribute fits */
+		return secure == (attr & TEE_MATTR_SECURE);
+	}
+
+	if (secure)
+		attr = TEE_MATTR_SECURE;
+
 	new_table = core_mmu_alloc_l2(NUM_L2_ENTRIES * SMALL_PAGE_SIZE);
 	if (!new_table)
 		return false;
 
-	entry = (uint32_t *)tbl_info->table + idx;
-	assert(!*entry || get_desc_type(1, *entry) == DESC_TYPE_SECTION);
-
-	/* We need to flush TLBs only if there already was some mapping */
-	flush_tlb = *entry;
-
 	new_table_desc = SECTION_PT_PT | (uint32_t)new_table;
-	if (*entry & SECTION_NOTSECURE)
+	if (!secure)
 		new_table_desc |= SECTION_PT_NOTSECURE;
-
-	/* store attributes of original block */
-	attr = desc_to_mattr(1, *entry);
-	paddr = *entry & ~SECTION_MASK;
-
-	/* Fill new xlat table with entries pointing to the same memory */
-	for (i = 0; i < NUM_L2_ENTRIES; i++) {
-		*new_table = paddr | mattr_to_desc(tbl_info->level + 1, attr);
-		paddr += SMALL_PAGE_SIZE;
-		new_table++;
-	}
 
 	/* Update descriptor at current level */
 	*entry = new_table_desc;
 
-	/* TODO: only invalidate entries touched above */
-	if (flush_tlb)
-		tlbi_all();
 	return true;
 }
 

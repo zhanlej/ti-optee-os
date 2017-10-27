@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016, GlobalLogic
+ * Copyright (C) 2017 Marvell International Ltd.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -25,30 +25,23 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
+#include <arm.h>
 #include <console.h>
+#include <drivers/gic.h>
+#include <drivers/serial8250_uart.h>
+#include <keep.h>
 #include <kernel/generic_boot.h>
-#include <kernel/panic.h>
 #include <kernel/pm_stubs.h>
+#include <kernel/misc.h>
+#include <kernel/panic.h>
+#include <kernel/tee_time.h>
 #include <mm/core_memprot.h>
+#include <mm/core_mmu.h>
 #include <platform_config.h>
 #include <stdint.h>
-#include <tee/entry_std.h>
+#include <string.h>
 #include <tee/entry_fast.h>
-#include <drivers/scif.h>
-#include <drivers/gic.h>
-
-register_phys_mem(MEM_AREA_IO_SEC, CONSOLE_UART_BASE, SCIF_REG_SIZE);
-register_phys_mem(MEM_AREA_IO_SEC, GICD_BASE, GIC_DIST_REG_SIZE);
-register_phys_mem(MEM_AREA_IO_SEC, GICC_BASE, GIC_DIST_REG_SIZE);
-
-register_nsec_ddr(NSEC_DDR_0_BASE, NSEC_DDR_0_SIZE);
-register_nsec_ddr(NSEC_DDR_1_BASE, NSEC_DDR_1_SIZE);
-#ifdef NSEC_DDR_2_BASE
-register_nsec_ddr(NSEC_DDR_2_BASE, NSEC_DDR_2_SIZE);
-#endif
-#ifdef NSEC_DDR_3_BASE
-register_nsec_ddr(NSEC_DDR_3_BASE, NSEC_DDR_3_SIZE);
-#endif
+#include <tee/entry_std.h>
 
 static void main_fiq(void);
 
@@ -64,20 +57,46 @@ static const struct thread_handlers handlers = {
 	.system_reset = pm_do_nothing,
 };
 
-static struct scif_uart_data console_data;
+static struct gic_data gic_data;
+static struct serial8250_uart_data console_data;
 
 const struct thread_handlers *generic_boot_get_handlers(void)
 {
 	return &handlers;
 }
 
+register_phys_mem(MEM_AREA_IO_SEC, CONSOLE_UART_BASE, CORE_MMU_DEVICE_SIZE);
+
+#ifdef GIC_BASE
+register_phys_mem(MEM_AREA_IO_SEC, GICD_BASE, CORE_MMU_DEVICE_SIZE);
+register_phys_mem(MEM_AREA_IO_SEC, GICC_BASE, CORE_MMU_DEVICE_SIZE);
+
+void main_init_gic(void)
+{
+	vaddr_t gicc_base;
+	vaddr_t gicd_base;
+
+	gicc_base = (vaddr_t)phys_to_virt(GIC_BASE + GICC_OFFSET,
+					  MEM_AREA_IO_SEC);
+	gicd_base = (vaddr_t)phys_to_virt(GIC_BASE + GICD_OFFSET,
+					  MEM_AREA_IO_SEC);
+	if (!gicc_base || !gicd_base)
+		panic();
+
+	gic_init_base_addr(&gic_data, gicc_base, gicd_base);
+
+	itr_init(&gic_data.chip);
+}
+#endif
+
 static void main_fiq(void)
 {
-	panic();
+	gic_it_handle(&gic_data);
 }
 
 void console_init(void)
 {
-	scif_uart_init(&console_data, CONSOLE_UART_BASE);
+	serial8250_uart_init(&console_data, CONSOLE_UART_BASE,
+		CONSOLE_UART_CLK_IN_HZ, CONSOLE_BAUDRATE);
 	register_serial_console(&console_data.chip);
 }

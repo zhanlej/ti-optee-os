@@ -165,8 +165,24 @@ static inline const char *teecore_memtype_name(enum teecore_memtypes type)
 struct core_mmu_phys_mem {
 	const char *name;
 	enum teecore_memtypes type;
-	paddr_t addr;
-	size_t size;
+	__extension__ union {
+#if __SIZEOF_LONG__ != __SIZEOF_PADDR__
+		struct {
+			uint32_t lo_addr;
+			uint32_t hi_addr;
+		};
+#endif
+		paddr_t addr;
+	};
+	__extension__ union {
+#if __SIZEOF_LONG__ != __SIZEOF_PADDR__
+		struct {
+			uint32_t lo_size;
+			uint32_t hi_size;
+		};
+#endif
+		paddr_size_t size;
+	};
 };
 
 #define __register_memory2(_name, _type, _addr, _size, _section, _id) \
@@ -174,11 +190,29 @@ struct core_mmu_phys_mem {
 		__used __section(_section) = \
 		{ .name = _name, .type = _type, .addr = _addr, .size = _size }
 
+#if __SIZEOF_LONG__ != __SIZEOF_PADDR__
+#define __register_memory2_ul(_name, _type, _addr, _size, _section, _id) \
+	static const struct core_mmu_phys_mem __phys_mem_ ## _id \
+		__used __section(_section) = \
+		{ .name = _name, .type = _type, .lo_addr = _addr, \
+		  .lo_size = _size }
+#else
+#define __register_memory2_ul(_name, _type, _addr, _size, _section, _id) \
+		__register_memory2(_name, _type, _addr, _size, _section, _id)
+#endif
+
 #define __register_memory1(name, type, addr, size, section, id) \
 		__register_memory2(name, type, addr, size, #section, id)
 
+#define __register_memory1_ul(name, type, addr, size, section, id) \
+		__register_memory2_ul(name, type, addr, size, #section, id)
+
 #define register_phys_mem(type, addr, size) \
 		__register_memory1(#addr, (type), (addr), (size), \
+				   phys_mem_map_section, __COUNTER__)
+
+#define register_phys_mem_ul(type, addr, size) \
+		__register_memory1_ul(#addr, (type), (addr), (size), \
 				   phys_mem_map_section, __COUNTER__)
 
 #define register_sdp_mem(addr, size) \
@@ -325,13 +359,15 @@ bool core_mmu_find_table(vaddr_t va, unsigned max_level,
 		struct core_mmu_table_info *tbl_info);
 
 /*
- * core_mmu_divide_block() - divide larger block/section into smaller ones
+ * core_mmu_prepare_small_page_mapping() - prepare target small page parent
+ *	pgdir so that each of its entry can be used to map a page.
  * @tbl_info:	table where target record located
- * @idx:	index of record
- * @return true if function was able to divide block, false on error
+ * @idx:	index of record for which a pdgir must be setup.
+ * @secure:	true/false if pgdir maps secure/non-secure memory (32bit mmu)
+ * @return true on successful, false on error
  */
-bool core_mmu_divide_block(struct core_mmu_table_info *tbl_info,
-			   unsigned int idx);
+bool core_mmu_prepare_small_page_mapping(struct core_mmu_table_info *tbl_info,
+					 unsigned int idx, bool secure);
 
 void core_mmu_set_entry_primitive(void *table, size_t level, size_t idx,
 				  paddr_t pa, uint32_t attr);

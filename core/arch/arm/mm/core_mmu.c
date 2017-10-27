@@ -51,7 +51,6 @@
 
 #include "core_mmu_private.h"
 
-#define MAX_MMAP_REGIONS	13
 #define RES_VASPACE_SIZE	(CORE_MMU_PGDIR_SIZE * 10)
 #define SHM_VASPACE_SIZE	(1024 * 1024 * 32)
 
@@ -66,7 +65,7 @@ unsigned long default_nsec_shm_size;
 unsigned long default_nsec_shm_paddr;
 
 static struct tee_mmap_region
-	static_memory_map[MAX_MMAP_REGIONS + 1];
+	static_memory_map[CFG_MMAP_REGIONS + 1];
 
 /* Define the platform's memory layout. */
 struct memaccess_area {
@@ -91,12 +90,12 @@ register_sdp_mem(CFG_TEE_SDP_MEM_BASE, CFG_TEE_SDP_MEM_SIZE);
 #endif
 
 #ifdef CFG_CORE_RWDATA_NOEXEC
-register_phys_mem(MEM_AREA_TEE_RAM_RX, VCORE_UNPG_RX_PA, VCORE_UNPG_RX_SZ);
-register_phys_mem(MEM_AREA_TEE_RAM_RO, VCORE_UNPG_RO_PA, VCORE_UNPG_RO_SZ);
-register_phys_mem(MEM_AREA_TEE_RAM_RW, VCORE_UNPG_RW_PA, VCORE_UNPG_RW_SZ);
+register_phys_mem_ul(MEM_AREA_TEE_RAM_RX, VCORE_UNPG_RX_PA, VCORE_UNPG_RX_SZ);
+register_phys_mem_ul(MEM_AREA_TEE_RAM_RO, VCORE_UNPG_RO_PA, VCORE_UNPG_RO_SZ);
+register_phys_mem_ul(MEM_AREA_TEE_RAM_RW, VCORE_UNPG_RW_PA, VCORE_UNPG_RW_SZ);
 #ifdef CFG_WITH_PAGER
-register_phys_mem(MEM_AREA_TEE_RAM_RX, VCORE_INIT_RX_PA, VCORE_INIT_RX_SZ);
-register_phys_mem(MEM_AREA_TEE_RAM_RO, VCORE_INIT_RO_PA, VCORE_INIT_RO_SZ);
+register_phys_mem_ul(MEM_AREA_TEE_RAM_RX, VCORE_INIT_RX_PA, VCORE_INIT_RX_SZ);
+register_phys_mem_ul(MEM_AREA_TEE_RAM_RO, VCORE_INIT_RO_PA, VCORE_INIT_RO_SZ);
 #endif
 #else
 register_phys_mem(MEM_AREA_TEE_RAM, CFG_TEE_RAM_START, CFG_TEE_RAM_PH_SIZE);
@@ -270,8 +269,8 @@ static void check_phys_mem_is_outside(struct core_mmu_phys_mem *start,
 	for (n = 0; n < nelems; n++) {
 		if (!core_is_buffer_outside(start[n].addr, start[n].size,
 					    map->pa, map->size)) {
-			EMSG(
-"Non-sec mem (%#" PRIxPA ":%#zx) overlaps map (type %d %#" PRIxPA ":%#zx)",
+			EMSG("Non-sec mem (%#" PRIxPA ":%#" PRIxPASZ
+			     ") overlaps map (type %d %#" PRIxPA ":%#zx)",
 			     start[n].addr, start[n].size,
 			     map->type, map->pa, map->size);
 			panic();
@@ -509,7 +508,7 @@ static void add_phys_mem(struct tee_mmap_region *memory_map, size_t num_elems,
 {
 	size_t n = 0;
 	paddr_t pa;
-	size_t size;
+	paddr_size_t size;
 
 	/*
 	 * If some ranges of memory of the same type do overlap
@@ -521,7 +520,7 @@ static void add_phys_mem(struct tee_mmap_region *memory_map, size_t num_elems,
 	 * mapped as both secure and non-secure. This will probably not
 	 * happen often in practice.
 	 */
-	DMSG("%s type %s 0x%08" PRIxPA " size 0x%08zx",
+	DMSG("%s type %s 0x%08" PRIxPA " size 0x%08" PRIxPASZ,
 	     mem->name, teecore_memtype_name(mem->type), mem->addr, mem->size);
 	while (true) {
 		if (n >= (num_elems - 1)) {
@@ -543,7 +542,7 @@ static void add_phys_mem(struct tee_mmap_region *memory_map, size_t num_elems,
 		}
 		if (mem->type < memory_map[n].type ||
 		    (mem->type == memory_map[n].type && mem->addr < pa))
-			break; /* found the spot where to inseart this memory */
+			break; /* found the spot where to insert this memory */
 		n++;
 	}
 
@@ -911,6 +910,7 @@ void core_init_mmu_map(void)
 			panic("Invalid memory access config: sec/nsec");
 	}
 
+	COMPILE_TIME_ASSERT(CFG_MMAP_REGIONS >= 13);
 	init_mem_map(static_memory_map, ARRAY_SIZE(static_memory_map));
 
 	map = static_memory_map;
@@ -1051,7 +1051,7 @@ static void *map_pa2va(struct tee_mmap_region *map, paddr_t pa)
 	if (!pa_is_in_map(map, pa))
 		return NULL;
 
-	return (void *)(map->va + pa - map->pa);
+	return (void *)(vaddr_t)(map->va + pa - map->pa);
 }
 
 /*
@@ -1273,9 +1273,14 @@ static void set_pg_region(struct core_mmu_table_info *dir_info,
 
 		r.size = MIN(CORE_MMU_PGDIR_SIZE - (r.va - pg_info->va_base),
 			     end - r.va);
+
 		if (!mobj_is_paged(region->mobj)) {
 			size_t granule = BIT(pg_info->shift);
 			size_t offset = r.va - region->va + region->offset;
+
+			r.size = MIN(r.size,
+				     mobj_get_phys_granule(region->mobj));
+			r.size = ROUNDUP(r.size, SMALL_PAGE_SIZE);
 
 			if (mobj_get_pa(region->mobj, offset, granule,
 					&r.pa) != TEE_SUCCESS)
@@ -1296,8 +1301,11 @@ TEE_Result core_mmu_map_pages(vaddr_t vstart, paddr_t *pages, size_t num_pages,
 	uint32_t old_attr;
 	vaddr_t vaddr = vstart;
 	size_t i;
+	bool secure;
 
 	assert(!(core_mmu_type_to_attr(memtype) & TEE_MATTR_PX));
+
+	secure = core_mmu_type_to_attr(memtype) & TEE_MATTR_SECURE;
 
 	if (vaddr & SMALL_PAGE_MASK)
 		return TEE_ERROR_BAD_PARAMETERS;
@@ -1324,8 +1332,9 @@ TEE_Result core_mmu_map_pages(vaddr_t vstart, paddr_t *pages, size_t num_pages,
 				break;
 
 			/* This is supertable. Need to divide it. */
-			if (!core_mmu_divide_block(&tbl_info, idx))
-				panic("Could not divide block into smaller tables");
+			if (!core_mmu_prepare_small_page_mapping(&tbl_info, idx,
+								 secure))
+				panic("Failed to spread pgdir on small tables");
 		}
 
 		core_mmu_get_entry(&tbl_info, idx, NULL, &old_attr);
@@ -1591,11 +1600,16 @@ static void check_pa_matches_va(void *va, paddr_t pa)
 #endif
 	if (!core_va2pa_helper(va, &p)) {
 		/* Verfiy only the static mapping (case non null phys addr) */
-		if (p && pa != p)
+		if (p && pa != p) {
+			DMSG("va %p maps 0x%" PRIxPA ", expect 0x%" PRIxPA,
+					va, p, pa);
 			panic();
+		}
 	} else {
-		if (pa)
+		if (pa) {
+			DMSG("va %p unmapped, expect 0x%" PRIxPA, va, pa);
 			panic();
+		}
 	}
 }
 #else
@@ -1617,8 +1631,16 @@ paddr_t virt_to_phys(void *va)
 #if defined(CFG_TEE_CORE_DEBUG)
 static void check_va_matches_pa(paddr_t pa, void *va)
 {
-	if (va && virt_to_phys(va) != pa)
+	paddr_t p;
+
+	if (!va)
+		return;
+
+	p = virt_to_phys(va);
+	if (p != pa) {
+		DMSG("va %p maps 0x%" PRIxPA " expect 0x%" PRIxPA, va, p, pa);
 		panic();
+	}
 }
 #else
 static void check_va_matches_pa(paddr_t pa __unused, void *va __unused)
@@ -1678,6 +1700,10 @@ void *phys_to_virt(paddr_t pa, enum teecore_memtypes m)
 	case MEM_AREA_TEE_RAM_RO:
 	case MEM_AREA_TEE_RAM_RW:
 		va = phys_to_virt_tee_ram(pa);
+		break;
+	case MEM_AREA_SHM_VASPACE:
+		/* Find VA from PA in dynamic SHM is not yet supported */
+		va = NULL;
 		break;
 	default:
 		va = map_pa2va(find_map_by_type_and_pa(m, pa), pa);

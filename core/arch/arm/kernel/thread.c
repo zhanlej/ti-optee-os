@@ -1182,6 +1182,7 @@ bool thread_disable_prealloc_rpc_cache(uint64_t *cookie)
 	rv = true;
 	for (n = 0; n < CFG_NUM_THREADS; n++) {
 		if (threads[n].rpc_arg) {
+			mobj_free(threads[n].rpc_mobj);
 			*cookie = threads[n].rpc_carg;
 			threads[n].rpc_carg = 0;
 			threads[n].rpc_arg = NULL;
@@ -1249,7 +1250,12 @@ struct mobj *thread_rpc_alloc_arg(size_t size, uint64_t *cookie)
 	if (!ALIGNMENT_IS_OK(pa, struct optee_msg_arg))
 		goto err;
 
-	mobj = mobj_shm_alloc(pa, size);
+	/* Check if this region is in static shared space */
+	if (core_pbuf_is(CORE_MEM_NSEC_SHM, pa, size))
+		mobj = mobj_shm_alloc(pa, size);
+	else if ((!(pa & SMALL_PAGE_MASK)) && size <= SMALL_PAGE_SIZE)
+		mobj = mobj_mapped_shm_alloc(&pa, 1, 0, co);
+
 	if (!mobj)
 		goto err;
 
@@ -1406,9 +1412,20 @@ static struct mobj *thread_rpc_alloc(size_t size, size_t align, unsigned int bt,
 	if (arg->num_params != 1)
 		goto fail;
 
-	mobj = mobj_shm_alloc(arg->params[0].u.tmem.buf_ptr,
-			      arg->params[0].u.tmem.size);
-	*cookie = arg->params[0].u.tmem.shm_ref;
+	if (arg->params[0].attr == OPTEE_MSG_ATTR_TYPE_TMEM_OUTPUT) {
+		*cookie = arg->params[0].u.tmem.shm_ref;
+		mobj = mobj_shm_alloc(arg->params[0].u.tmem.buf_ptr,
+				      arg->params[0].u.tmem.size);
+	} else if (arg->params[0].attr == (OPTEE_MSG_ATTR_TYPE_TMEM_OUTPUT |
+					   OPTEE_MSG_ATTR_NONCONTIG)) {
+		*cookie = arg->params[0].u.tmem.shm_ref;
+		mobj = msg_param_mobj_from_noncontig(
+			arg->params[0].u.tmem.buf_ptr,
+			arg->params[0].u.tmem.size,
+			*cookie,
+			true);
+	} else
+		goto fail;
 
 	if (!mobj)
 		goto free_first;

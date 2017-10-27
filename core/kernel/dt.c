@@ -58,6 +58,15 @@ const struct dt_driver *__dt_driver_end(void)
 	return &__rodata_dtdrv_end;
 }
 
+bool dt_have_prop(const void *fdt, int offs, const char *propname)
+{
+	const void *prop;
+
+	prop = fdt_getprop(fdt, offs, propname, NULL);
+
+	return prop;
+}
+
 int dt_map_dev(const void *fdt, int offs, vaddr_t *base, size_t *size)
 {
 	enum teecore_memtypes mtype;
@@ -87,7 +96,7 @@ int dt_map_dev(const void *fdt, int offs, vaddr_t *base, size_t *size)
 	/* Check if we have a mapping, create one if needed */
 	if (!core_mmu_add_mapping(mtype, pbase, sz)) {
 		EMSG("Failed to map %zu bytes at PA 0x%"PRIxPA,
-		     (size_t)size, pbase);
+		     (size_t)sz, pbase);
 		return -1;
 	}
 	vbase = (vaddr_t)phys_to_virt(pbase, mtype);
@@ -137,12 +146,17 @@ paddr_t _fdt_reg_base_address(const void *fdt, int offs)
 	const void *reg;
 	int ncells;
 	int len;
+	int parent;
+
+	parent = fdt_parent_offset(fdt, offs);
+	if (parent < 0)
+		return (paddr_t)-1;
 
 	reg = fdt_getprop(fdt, offs, "reg", &len);
 	if (!reg)
 		return (paddr_t)-1;
 
-	ncells = fdt_address_cells(fdt, offs);
+	ncells = fdt_address_cells(fdt, parent);
 	if (ncells < 0)
 		return (paddr_t)-1;
 
@@ -155,18 +169,23 @@ ssize_t _fdt_reg_size(const void *fdt, int offs)
 	uint32_t sz;
 	int n;
 	int len;
+	int parent;
+
+	parent = fdt_parent_offset(fdt, offs);
+	if (parent < 0)
+		return (paddr_t)-1;
 
 	reg = (const uint32_t *)fdt_getprop(fdt, offs, "reg", &len);
 	if (!reg)
 		return -1;
 
-	n = fdt_address_cells(fdt, offs);
+	n = fdt_address_cells(fdt, parent);
 	if (n < 1 || n > 2)
 		return -1;
 
 	reg += n;
 
-	n = fdt_size_cells(fdt, offs);
+	n = fdt_size_cells(fdt, parent);
 	if (n < 1 || n > 2)
 		return -1;
 

@@ -61,10 +61,11 @@
 #include <compiler.h>
 #include <inttypes.h>
 #include <keep.h>
+#include <kernel/linker.h>
 #include <kernel/misc.h>
 #include <kernel/panic.h>
-#include <kernel/tlb_helpers.h>
 #include <kernel/thread.h>
+#include <kernel/tlb_helpers.h>
 #include <mm/core_memprot.h>
 #include <mm/core_memprot.h>
 #include <mm/pgt_cache.h>
@@ -454,9 +455,21 @@ static unsigned int calc_physical_addr_size_bits(uint64_t max_addr)
 	return TCR_PS_BITS_4GB;
 }
 
-void core_init_mmu_tables(struct tee_mmap_region *mm)
+static paddr_t get_nsec_ddr_max_pa(void)
 {
 	paddr_t max_pa = 0;
+	const struct core_mmu_phys_mem *mem;
+
+	for (mem = &__start_phys_nsec_ddr_section;
+	     mem < &__end_phys_nsec_ddr_section; mem++)
+		max_pa = MAX(max_pa, mem->addr + mem->size);
+
+	return max_pa;
+}
+
+void core_init_mmu_tables(struct tee_mmap_region *mm)
+{
+	paddr_t max_pa = get_nsec_ddr_max_pa();
 	uint64_t max_va = 0;
 	size_t n;
 
@@ -653,17 +666,11 @@ bool core_mmu_find_table(vaddr_t va, unsigned max_level,
 	}
 }
 
-bool core_mmu_divide_block(struct core_mmu_table_info *tbl_info,
-			   unsigned int idx)
+bool core_mmu_prepare_small_page_mapping(struct core_mmu_table_info *tbl_info,
+					 unsigned int idx, bool __unused secure)
 {
 	uint64_t *new_table;
 	uint64_t *entry;
-	uint64_t new_table_desc;
-	size_t new_entry_size;
-	paddr_t paddr;
-	uint32_t attr;
-	int i;
-	bool flush_tlb;
 
 	if (tbl_info->level >= 3)
 		return false;
@@ -678,31 +685,19 @@ bool core_mmu_divide_block(struct core_mmu_table_info *tbl_info,
 		return false;
 
 	entry = (uint64_t *)tbl_info->table + idx;
-	assert(!*entry || (*entry & DESC_ENTRY_TYPE_MASK) == BLOCK_DESC);
 
-	/* We need to flush TLBs only if there already was some mapping */
-	flush_tlb = *entry;
+	if ((*entry & DESC_ENTRY_TYPE_MASK) == BLOCK_DESC)
+		return true;
+	if (*entry)
+		return false;
 
 	new_table = xlat_tables[next_xlat++];
-	new_table_desc = TABLE_DESC | (uint64_t)(uintptr_t)new_table;
+	if (next_xlat > MAX_XLAT_TABLES)
+		panic("running out of xlat tables");
+	memset(new_table, 0, XLAT_TABLE_SIZE);
 
-	/* store attributes of original block */
-	attr = desc_to_mattr(tbl_info->level, *entry);
-	paddr = *entry & OUTPUT_ADDRESS_MASK;
-	new_entry_size = 1 << (tbl_info->shift - XLAT_TABLE_ENTRIES_SHIFT);
+	*entry = TABLE_DESC | (uint64_t)(uintptr_t)new_table;
 
-	/* Fill new xlat table with entries pointing to the same memory */
-	for (i = 0; i < XLAT_TABLE_ENTRIES; i++) {
-		*new_table = paddr | mattr_to_desc(tbl_info->level + 1, attr);
-		paddr += new_entry_size;
-		new_table++;
-	}
-
-	/* Update descriptor at current level */
-	*entry = new_table_desc;
-
-	if (flush_tlb)
-		tlbi_all();
 	return true;
 }
 

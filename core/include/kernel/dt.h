@@ -34,8 +34,8 @@
 #include <util.h>
 
 /*
- * Bitfield to reflect status and secure-status values ("ok", "disabled" or not
- * present)
+ * Bitfield to reflect status and secure-status values ("okay", "disabled"
+ * or not present)
  */
 #define DT_STATUS_DISABLED 0
 #define DT_STATUS_OK_NSEC  BIT(0)
@@ -87,6 +87,16 @@ const struct dt_driver *__dt_driver_end(void);
  * Returns 0 on success or -1 in case of error.
  */
 int dt_map_dev(const void *fdt, int offs, vaddr_t *base, size_t *size);
+
+/*
+ * Check whether the node at @offs contains the property with propname or not.
+ *
+ * @offs is the offset of the node that describes the device in @fdt.
+ * @propname is the property that need to check
+ *
+ * Returns true on success or false if no propname.
+ */
+bool dt_have_prop(const void *fdt, int offs, const char *propname);
 
 /*
  * FDT manipulation functions, not provided by <libfdt.h>

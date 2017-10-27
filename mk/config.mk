@@ -61,11 +61,6 @@ CFG_TEE_TA_LOG_LEVEL ?= 1
 # CFG_TEE_TA_LOG_LEVEL. Otherwise, they are not output at all
 CFG_TEE_CORE_TA_TRACE ?= y
 
-# Define TEE_Panic as a macro to help debugging panics caused by calls to
-# TEE_Panic. This flag can have a different value when later compiling the
-# TA
-CFG_TEE_PANIC_DEBUG ?= y
-
 # If 1, enable debug features in TA memory allocation.
 # Debug features include check of buffer overflow, statistics, mark/check heap
 # feature.
@@ -104,7 +99,7 @@ TEE_IMPL_VERSION ?= $(shell git describe --always --dirty=-dev 2>/dev/null || ec
 # with limited depth not including any tag, so there is really no guarantee
 # that TEE_IMPL_VERSION contains the major and minor revision numbers.
 CFG_OPTEE_REVISION_MAJOR ?= 2
-CFG_OPTEE_REVISION_MINOR ?= 5
+CFG_OPTEE_REVISION_MINOR ?= 6
 
 # Trusted OS implementation manufacturer name
 CFG_TEE_MANUFACTURER ?= LINARO
@@ -157,13 +152,17 @@ CFG_LIBUTILS_WITH_ISOC ?= y
 # With CFG_TA_FLOAT_SUPPORT enabled TA code is free use floating point types
 CFG_TA_FLOAT_SUPPORT ?= y
 
-# Stack unwinding: print a stack dump to the console on abort
+# Stack unwinding: print a stack dump to the console on core or TA abort, or
+# when a TA panics.
 # If CFG_UNWIND is enabled, both the kernel and user mode call stacks can be
 # unwound (not paged TAs, however).
 # Note that 32-bit ARM code needs unwind tables for this to work, so enabling
 # this option will increase the size of the 32-bit TEE binary by a few KB.
 # Similarly, TAs have to be compiled with -funwind-tables (default when the
 # option is set) otherwise they can't be unwound.
+# Warning: since the unwind sequence for user-mode (TA) code is implemented in
+# the privileged layer of OP-TEE, enabling this feature will weaken the
+# user/kernel isolation. Therefore it should be disabled in release builds.
 ifeq ($(CFG_TEE_CORE_DEBUG),y)
 CFG_UNWIND ?= y
 endif
@@ -268,3 +267,14 @@ CFG_SECURE_DATA_PATH ?= n
 # so its value represents log2(cores/cluster).
 # Default is 2**(2) = 4 cores per cluster.
 CFG_CORE_CLUSTER_SHIFT ?= 2
+
+# Do not report to NW that dynamic shared memory (shared memory outside
+# predefined region) is enabled.
+# Note that you can disable this feature for debug purposes. OP-TEE will not
+# report to Normal World that it support dynamic SHM. But, nevertheles it
+# will accept dynamic SHM buffers.
+CFG_DYN_SHM_CAP ?= y
+
+# Enables support for larger physical addresses, that is, it will define
+# paddr_t as a 64-bit type.
+CFG_CORE_LARGE_PHYS_ADDR ?= n

@@ -69,3 +69,13 @@ CFG_SE_API ?= y
 CFG_SE_API_SELF_TEST ?= y
 CFG_PCSC_PASSTHRU_READER_DRV ?= y
 endif
+
+ifeq ($(PLATFORM_FLAVOR),fvp)
+# DRAM1 is defined above 4G
+$(call force,CFG_CORE_LARGE_PHYS_ADDR,y)
+endif
+
+ifeq ($(PLATFORM_FLAVOR),juno)
+# DRAM1 is defined above 4G
+$(call force,CFG_CORE_LARGE_PHYS_ADDR,y)
+endif
