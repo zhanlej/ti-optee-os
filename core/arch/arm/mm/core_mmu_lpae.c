@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: (BSD-2-Clause AND BSD-3-Clause)
 /*
  * Copyright (c) 2015-2016, Linaro Limited
  * All rights reserved.
@@ -178,8 +179,19 @@
 #define MAX_XLAT_TABLES		5
 #endif
 
-/* MMU L1 table, one for each core */
-static uint64_t l1_xlation_table[CFG_TEE_CORE_NB_CORE][NUM_L1_ENTRIES]
+/*
+ * MMU L1 table, one for each core
+ *
+ * With CFG_CORE_UNMAP_CORE_AT_EL0, each core has one table to be used
+ * while in kernel mode and one to be used while in user mode. These are
+ * not static as the symbols are accessed directly from assembly.
+ */
+#ifdef CFG_CORE_UNMAP_CORE_AT_EL0
+#define NUM_L1_TABLES	2
+#else
+#define NUM_L1_TABLES	1
+#endif
+uint64_t l1_xlation_table[NUM_L1_TABLES][CFG_TEE_CORE_NB_CORE][NUM_L1_ENTRIES]
 	__aligned(NUM_L1_ENTRIES * XLAT_ENTRY_SIZE) __section(".nozi.mmu.l1");
 
 static uint64_t xlat_tables[MAX_XLAT_TABLES][XLAT_TABLE_ENTRIES]
@@ -473,6 +485,12 @@ void core_init_mmu_tables(struct tee_mmap_region *mm)
 	uint64_t max_va = 0;
 	size_t n;
 
+#ifdef CFG_CORE_UNMAP_CORE_AT_EL0
+	COMPILE_TIME_ASSERT(CORE_MMU_L1_TBL_OFFSET ==
+			   sizeof(l1_xlation_table) / 2);
+#endif
+
+
 	for (n = 0; !core_mmap_is_end_of_table(mm + n); n++) {
 		paddr_t pa_end;
 		vaddr_t va_end;
@@ -492,14 +510,14 @@ void core_init_mmu_tables(struct tee_mmap_region *mm)
 	}
 
 	/* Clear table before use */
-	memset(l1_xlation_table[0], 0, NUM_L1_ENTRIES * XLAT_ENTRY_SIZE);
-	init_xlation_table(mm, 0, l1_xlation_table[0], 1);
+	memset(l1_xlation_table, 0, sizeof(l1_xlation_table));
+	init_xlation_table(mm, 0, l1_xlation_table[0][0], 1);
 	for (n = 1; n < CFG_TEE_CORE_NB_CORE; n++)
-		memcpy(l1_xlation_table[n], l1_xlation_table[0],
+		memcpy(l1_xlation_table[0][n], l1_xlation_table[0][0],
 			XLAT_ENTRY_SIZE * NUM_L1_ENTRIES);
 
 	for (n = 1; n < NUM_L1_ENTRIES; n++) {
-		if (!l1_xlation_table[0][n]) {
+		if (!l1_xlation_table[0][0][n]) {
 			user_va_idx = n;
 			break;
 		}
@@ -526,7 +544,7 @@ void core_init_mmu_regs(void)
 	uint32_t mair;
 	paddr_t ttbr0;
 
-	ttbr0 = virt_to_phys(l1_xlation_table[get_core_pos()]);
+	ttbr0 = virt_to_phys(l1_xlation_table[0][get_core_pos()]);
 
 	mair  = MAIR_ATTR_SET(ATTR_DEVICE, ATTR_DEVICE_INDEX);
 	mair |= MAIR_ATTR_SET(ATTR_IWBWA_OWBWA_NTR, ATTR_IWBWA_OWBWA_NTR_INDEX);
@@ -554,7 +572,7 @@ void core_init_mmu_regs(void)
 	uint64_t tcr;
 	paddr_t ttbr0;
 
-	ttbr0 = virt_to_phys(l1_xlation_table[get_core_pos()]);
+	ttbr0 = virt_to_phys(l1_xlation_table[0][get_core_pos()]);
 
 	mair  = MAIR_ATTR_SET(ATTR_DEVICE, ATTR_DEVICE_INDEX);
 	mair |= MAIR_ATTR_SET(ATTR_IWBWA_OWBWA_NTR, ATTR_IWBWA_OWBWA_NTR_INDEX);
@@ -618,18 +636,21 @@ void core_mmu_create_user_map(struct user_ta_ctx *utc,
 	memset(dir_info.table, 0, PGT_SIZE);
 	core_mmu_populate_user_map(&dir_info, utc);
 	map->user_map = virt_to_phys(dir_info.table) | TABLE_DESC;
-	map->asid = utc->context & TTBR_ASID_MASK;
+	map->asid = utc->mmu->asid;
 }
 
 bool core_mmu_find_table(vaddr_t va, unsigned max_level,
 		struct core_mmu_table_info *tbl_info)
 {
-	uint64_t *tbl = l1_xlation_table[get_core_pos()];
-	uintptr_t ntbl;
-	unsigned level = 1;
+	uint32_t exceptions = thread_mask_exceptions(THREAD_EXCP_ALL);
+	unsigned int num_entries = NUM_L1_ENTRIES;
+	unsigned int level = 1;
 	vaddr_t va_base = 0;
-	unsigned num_entries = NUM_L1_ENTRIES;
+	bool ret = false;
+	uintptr_t ntbl;
+	uint64_t *tbl;
 
+	tbl = l1_xlation_table[0][get_core_pos()];
 	while (true) {
 		unsigned level_size_shift =
 			L1_XLAT_ADDRESS_SHIFT - (level - 1) *
@@ -637,7 +658,7 @@ bool core_mmu_find_table(vaddr_t va, unsigned max_level,
 		unsigned n = (va - va_base) >> level_size_shift;
 
 		if (n >= num_entries)
-			return false;
+			goto out;
 
 		if (level == max_level || level == 3 ||
 			(tbl[n] & TABLE_DESC) != TABLE_DESC) {
@@ -645,12 +666,24 @@ bool core_mmu_find_table(vaddr_t va, unsigned max_level,
 			 * We've either reached max_level, level 3, a block
 			 * mapping entry or an "invalid" mapping entry.
 			 */
+
+			/*
+			 * Level 1 is the CPU specific translation table.
+			 * It doesn't make sense to return anything based
+			 * on that unless foreign interrupts already are
+			 * masked.
+			 */
+			if (level == 1 &&
+			    !(exceptions & THREAD_EXCP_FOREIGN_INTR))
+				goto out;
+
 			tbl_info->table = tbl;
 			tbl_info->va_base = va_base;
 			tbl_info->level = level;
 			tbl_info->shift = level_size_shift;
 			tbl_info->num_entries = num_entries;
-			return true;
+			ret = true;
+			goto out;
 		}
 
 		/* Copy bits 39:12 from tbl[n] to ntbl */
@@ -658,12 +691,15 @@ bool core_mmu_find_table(vaddr_t va, unsigned max_level,
 
 		tbl = phys_to_virt(ntbl, MEM_AREA_TEE_RAM_RW_DATA);
 		if (!tbl)
-			return false;
+			goto out;
 
 		va_base += (vaddr_t)n << level_size_shift;
 		level++;
 		num_entries = XLAT_TABLE_ENTRIES;
 	}
+out:
+	thread_unmask_exceptions(exceptions);
+	return ret;
 }
 
 bool core_mmu_prepare_small_page_mapping(struct core_mmu_table_info *tbl_info,
@@ -743,7 +779,7 @@ bool core_mmu_user_mapping_is_active(void)
 	uint32_t exceptions = thread_mask_exceptions(THREAD_EXCP_ALL);
 
 	assert(user_va_idx != -1);
-	ret = l1_xlation_table[get_core_pos()][user_va_idx];
+	ret = l1_xlation_table[0][get_core_pos()][user_va_idx];
 	thread_unmask_exceptions(exceptions);
 
 	return ret;
@@ -754,7 +790,7 @@ void core_mmu_get_user_map(struct core_mmu_user_map *map)
 {
 	assert(user_va_idx != -1);
 
-	map->user_map = l1_xlation_table[get_core_pos()][user_va_idx];
+	map->user_map = l1_xlation_table[0][get_core_pos()][user_va_idx];
 	if (map->user_map) {
 		map->asid = (read_ttbr0_64bit() >> TTBR_ASID_SHIFT) &
 			    TTBR_ASID_MASK;
@@ -778,13 +814,21 @@ void core_mmu_set_user_map(struct core_mmu_user_map *map)
 
 	/* Set the new map */
 	if (map && map->user_map) {
-		l1_xlation_table[get_core_pos()][user_va_idx] = map->user_map;
+		l1_xlation_table[0][get_core_pos()][user_va_idx] =
+			map->user_map;
+#ifdef CFG_CORE_UNMAP_CORE_AT_EL0
+		l1_xlation_table[1][get_core_pos()][user_va_idx] =
+			map->user_map;
+#endif
 		dsb();	/* Make sure the write above is visible */
 		ttbr |= ((uint64_t)map->asid << TTBR_ASID_SHIFT);
 		write_ttbr0_64bit(ttbr);
 		isb();
 	} else {
-		l1_xlation_table[get_core_pos()][user_va_idx] = 0;
+		l1_xlation_table[0][get_core_pos()][user_va_idx] = 0;
+#ifdef CFG_CORE_UNMAP_CORE_AT_EL0
+		l1_xlation_table[1][get_core_pos()][user_va_idx] = 0;
+#endif
 		dsb();	/* Make sure the write above is visible */
 	}
 
@@ -828,7 +872,7 @@ void core_mmu_get_user_map(struct core_mmu_user_map *map)
 {
 	assert(user_va_idx != -1);
 
-	map->user_map = l1_xlation_table[get_core_pos()][user_va_idx];
+	map->user_map = l1_xlation_table[0][get_core_pos()][user_va_idx];
 	if (map->user_map) {
 		map->asid = (read_ttbr0_el1() >> TTBR_ASID_SHIFT) &
 			    TTBR_ASID_MASK;
@@ -840,9 +884,7 @@ void core_mmu_get_user_map(struct core_mmu_user_map *map)
 void core_mmu_set_user_map(struct core_mmu_user_map *map)
 {
 	uint64_t ttbr;
-	uint32_t daif = read_daif();
-
-	write_daif(daif | DAIF_AIF);
+	uint32_t exceptions = thread_mask_exceptions(THREAD_EXCP_ALL);
 
 	ttbr = read_ttbr0_el1();
 	/* Clear ASID */
@@ -852,19 +894,27 @@ void core_mmu_set_user_map(struct core_mmu_user_map *map)
 
 	/* Set the new map */
 	if (map && map->user_map) {
-		l1_xlation_table[get_core_pos()][user_va_idx] = map->user_map;
+		l1_xlation_table[0][get_core_pos()][user_va_idx] =
+			map->user_map;
+#ifdef CFG_CORE_UNMAP_CORE_AT_EL0
+		l1_xlation_table[1][get_core_pos()][user_va_idx] =
+			map->user_map;
+#endif
 		dsb();	/* Make sure the write above is visible */
 		ttbr |= ((uint64_t)map->asid << TTBR_ASID_SHIFT);
 		write_ttbr0_el1(ttbr);
 		isb();
 	} else {
-		l1_xlation_table[get_core_pos()][user_va_idx] = 0;
+		l1_xlation_table[0][get_core_pos()][user_va_idx] = 0;
+#ifdef CFG_CORE_UNMAP_CORE_AT_EL0
+		l1_xlation_table[1][get_core_pos()][user_va_idx] = 0;
+#endif
 		dsb();	/* Make sure the write above is visible */
 	}
 
 	tlbi_all();
 
-	write_daif(daif);
+	thread_unmask_exceptions(exceptions);
 }
 
 enum core_mmu_fault core_mmu_get_fault_type(uint32_t fault_descr)
@@ -878,6 +928,10 @@ enum core_mmu_fault core_mmu_get_fault_type(uint32_t fault_descr)
 	case ESR_EC_IABT_EL1:
 	case ESR_EC_DABT_EL1:
 		switch (fault_descr & ESR_FSC_MASK) {
+		case ESR_FSC_SIZE_L0:
+		case ESR_FSC_SIZE_L1:
+		case ESR_FSC_SIZE_L2:
+		case ESR_FSC_SIZE_L3:
 		case ESR_FSC_TRANS_L0:
 		case ESR_FSC_TRANS_L1:
 		case ESR_FSC_TRANS_L2:

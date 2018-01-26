@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: BSD-2-Clause
 /*
  * Copyright (c) 2016, Linaro Limited
  * Copyright (c) 2014, STMicroelectronics International N.V.
@@ -31,6 +32,7 @@
 #include <arm.h>
 #include <assert.h>
 #include <keep.h>
+#include <kernel/asan.h>
 #include <kernel/misc.h>
 #include <kernel/msg_param.h>
 #include <kernel/panic.h>
@@ -46,8 +48,8 @@
 #include <optee_msg.h>
 #include <sm/optee_smc.h>
 #include <sm/sm.h>
-#include <tee/tee_fs_rpc.h>
 #include <tee/tee_cryp_utl.h>
+#include <tee/tee_fs_rpc.h>
 #include <trace.h>
 #include <util.h>
 
@@ -146,6 +148,11 @@ thread_pm_handler_t thread_cpu_resume_handler_ptr;
 thread_pm_handler_t thread_system_off_handler_ptr;
 thread_pm_handler_t thread_system_reset_handler_ptr;
 
+#ifdef CFG_CORE_UNMAP_CORE_AT_EL0
+static vaddr_t thread_user_kcode_va;
+long thread_user_kcode_offset;
+static size_t thread_user_kcode_size;
+#endif /*CFG_CORE_UNMAP_CORE_AT_EL0*/
 
 static unsigned int thread_global_lock = SPINLOCK_UNLOCK;
 static bool thread_prealloc_rpc_cache;
@@ -864,6 +871,7 @@ static void init_thread_stacks(void)
 
 		/* init effective stack */
 		sp = tee_mm_get_smem(mm) + tee_mm_get_bytes(mm);
+		asan_tag_access((void *)tee_mm_get_smem(mm), (void *)sp);
 		if (!thread_init_stack(n, sp))
 			panic("init stack failed");
 	}
@@ -881,6 +889,25 @@ static void init_thread_stacks(void)
 }
 #endif /*CFG_WITH_PAGER*/
 
+static void init_user_kcode(void)
+{
+#ifdef CFG_CORE_UNMAP_CORE_AT_EL0
+	vaddr_t v;
+
+	v = (vaddr_t)thread_vect_table;
+	thread_user_kcode_va = ROUNDDOWN(v, CORE_MMU_USER_CODE_SIZE);
+	/*
+	 * The maximum size of the exception vector and associated code is
+	 * something slightly larger than 2 KiB. Worst case the exception
+	 * vector can span two pages.
+	 */
+	thread_user_kcode_size = CORE_MMU_USER_CODE_SIZE * 2;
+
+	core_mmu_get_user_va_range(&v, NULL);
+	thread_user_kcode_offset = thread_user_kcode_va - v;
+#endif /*CFG_CORE_UNMAP_CORE_AT_EL0*/
+}
+
 void thread_init_primary(const struct thread_handlers *handlers)
 {
 	init_handlers(handlers);
@@ -890,6 +917,8 @@ void thread_init_primary(const struct thread_handlers *handlers)
 
 	init_thread_stacks();
 	pgt_init();
+
+	init_user_kcode();
 }
 
 static void init_sec_mon(size_t pos __maybe_unused)
@@ -1141,6 +1170,17 @@ uint32_t thread_enter_user_mode(unsigned long a0, unsigned long a1,
 	return __thread_enter_user_mode(a0, a1, a2, a3, user_sp, entry_func,
 					spsr, exit_status0, exit_status1);
 }
+
+#ifdef CFG_CORE_UNMAP_CORE_AT_EL0
+void thread_get_user_kcode(struct mobj **mobj, size_t *offset,
+			   vaddr_t *va, size_t *sz)
+{
+	core_mmu_get_user_va_range(va, NULL);
+	*mobj = mobj_tee_ram;
+	*offset = thread_user_kcode_va - CFG_TEE_RAM_START;
+	*sz = thread_user_kcode_size;
+}
+#endif /*CFG_CORE_UNMAP_CORE_AT_EL0*/
 
 void thread_add_mutex(struct mutex *m)
 {

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: BSD-2-Clause
 /*
  * Copyright (c) 2014, STMicroelectronics International N.V.
  * Copyright (c) 2015-2017 Linaro Limited
@@ -45,7 +46,6 @@
 #include <stdlib.h>
 #include <sys/queue.h>
 #include <ta_pub_key.h>
-#include <tee/tee_cryp_provider.h>
 #include <tee/tee_cryp_utl.h>
 #include <tee/tee_obj.h>
 #include <tee/tee_svc_cryp.h>
@@ -137,7 +137,7 @@ static TEE_Result load_elf_segments(struct user_ta_ctx *utc,
 	uint32_t mattr;
 	size_t idx = 0;
 
-	tee_mmu_map_clear(utc);
+	tee_mmu_map_init(utc);
 
 	/*
 	 * Add stack segment
@@ -502,12 +502,12 @@ static void user_ta_enter_close_session(struct tee_ta_session *s)
 static void user_ta_dump_state(struct tee_ta_ctx *ctx)
 {
 	struct user_ta_ctx *utc __maybe_unused = to_user_ta_ctx(ctx);
-	char flags[4] = { '\0', };
+	char flags[7] = { '\0', };
 	size_t n;
 
 	EMSG_RAW(" arch: %s  load address: 0x%x  ctx-idr: %d",
 		 utc->is_32bit ? "arm" : "aarch64", utc->load_addr,
-		 utc->context);
+		 utc->mmu->asid);
 	EMSG_RAW(" stack: 0x%" PRIxVA " %zu",
 		 utc->mmu->regions[TEE_MMU_UMAP_STACK_IDX].va,
 		 utc->mobj_stack->size);
@@ -518,8 +518,8 @@ static void user_ta_dump_state(struct tee_ta_ctx *ctx)
 			mobj_get_pa(utc->mmu->regions[n].mobj,
 				    utc->mmu->regions[n].offset, 0, &pa);
 
-		mattr_uflags_to_str(flags, sizeof(flags),
-				    utc->mmu->regions[n].attr);
+		mattr_perm_to_str(flags, sizeof(flags),
+				  utc->mmu->regions[n].attr);
 		EMSG_RAW(" region %zu: va %#" PRIxVA " pa %#" PRIxPA
 			 " size %#zx flags %s",
 			 n, utc->mmu->regions[n].va, pa,
@@ -585,7 +585,7 @@ static void user_ta_ctx_destroy(struct tee_ta_ctx *ctx)
 
 static uint32_t user_ta_get_instance_id(struct tee_ta_ctx *ctx)
 {
-	return to_user_ta_ctx(ctx)->context;
+	return to_user_ta_ctx(ctx)->mmu->asid;
 }
 
 static const struct tee_ta_ops user_ta_ops __rodata_unpaged = {

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: BSD-2-Clause
 /*
  * Copyright (c) 2014, STMicroelectronics International N.V.
  * All rights reserved.
@@ -33,11 +34,7 @@
 
 int trace_level = TRACE_LEVEL;
 
-#ifdef TA_LOG_PREFIX
-const char trace_ext_prefix[]  = TA_LOG_PREFIX;
-#else
-const char trace_ext_prefix[]  = "USER-TA";
-#endif
+const char trace_ext_prefix[]  = "TA";
 
 #ifndef TA_VERSION
 #define TA_VERSION "Undefined version"

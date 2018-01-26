@@ -1,7 +1,5 @@
 PLATFORM_FLAVOR ?= ls1021atwr
 
-core_arm32-platform-aflags	+= -mfpu=neon
-
 $(call force,CFG_GENERIC_BOOT,y)
 $(call force,CFG_SECURE_TIME_SOURCE_CNTPCT,y)
 $(call force,CFG_GIC,y)
@@ -18,6 +16,10 @@ ifeq ($(PLATFORM_FLAVOR),ls1021aqds)
 include core/arch/arm/cpu/cortex-a7.mk
 CFG_BOOT_SYNC_CPU ?= y
 CFG_BOOT_SECONDARY_REQUEST ?= y
+endif
+
+ifeq ($(PLATFORM_FLAVOR),ls1012ardb)
+include core/arch/arm/cpu/cortex-armv8-0.mk
 endif
 
 ifeq ($(PLATFORM_FLAVOR),ls1043ardb)

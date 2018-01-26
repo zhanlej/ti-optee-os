@@ -1,28 +1,6 @@
+/* SPDX-License-Identifier: BSD-2-Clause */
 /*
  * Copyright (c) 2014, Linaro Limited
- * All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice,
- * this list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- * this list of conditions and the following disclaimer in the documentation
- * and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
- * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
- * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
- * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
- * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
- * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
  */
 
 #include <arm32_macros.S>
@@ -52,7 +30,6 @@ panic_boot_file:
 /*
  * void assert_flat_mapped_range(uint32_t vaddr, uint32_t line)
  */
-.section .text.init
 LOCAL_FUNC __assert_flat_mapped_range , :
 UNWIND(	.fnstart)
 UNWIND(	.cantunwind)
@@ -96,9 +73,10 @@ UNWIND(	.fnend)
 END_FUNC plat_cpu_reset_early
 KEEP_PAGER plat_cpu_reset_early
 
-.section .text.boot
-FUNC _start , :
-	b	reset
+	.section .text.reset_vect_table
+	.align 5
+LOCAL_FUNC reset_vect_table , :
+	b	.
 	b	.	/* Undef */
 	b	.	/* Syscall */
 	b	.	/* Prefetch abort */
@@ -106,12 +84,11 @@ FUNC _start , :
 	b	.	/* Reserved */
 	b	.	/* IRQ */
 	b	.	/* FIQ */
-END_FUNC _start
-KEEP_INIT _start
+END_FUNC reset_vect_table
 
 	.macro cpu_is_ready
 #ifdef CFG_BOOT_SYNC_CPU
-	bl	get_core_pos
+	bl	__get_core_pos
 	lsl	r0, r0, #2
 	ldr	r1,=sem_cpu_sync
 	ldr	r2, =SEM_CPU_READY
@@ -231,7 +208,28 @@ KEEP_INIT _start
 	mov	r7, r1
 	.endm
 
-LOCAL_FUNC reset , :
+	.macro maybe_init_ca15_spectre_workaround
+#if !defined(CFG_WITH_ARM_TRUSTED_FW) && \
+    (defined(CFG_CORE_WORKAROUND_SPECTRE_BP) || \
+     defined(CFG_CORE_WORKAROUND_SPECTRE_BP_SEC))
+	read_midr r0
+	ubfx	r1, r0, #MIDR_IMPLEMENTER_SHIFT, #MIDR_IMPLEMENTER_WIDTH
+	cmp	r1, #MIDR_IMPLEMENTER_ARM
+	bne	1f
+	ubfx	r1, r0, #MIDR_PRIMARY_PART_NUM_SHIFT, \
+			#MIDR_PRIMARY_PART_NUM_WIDTH
+	movw	r2, #CORTEX_A15_PART_NUM
+	cmp	r1, r2
+	bne	1f
+	read_actlr r0
+	orr	r0, r0, #ACTLR_CA15_ENABLE_INVALIDATE_BTB
+	write_actlr r0
+	isb
+1:
+#endif
+	.endm
+
+FUNC _start , :
 UNWIND(	.fnstart)
 UNWIND(	.cantunwind)
 
@@ -239,30 +237,32 @@ UNWIND(	.cantunwind)
 
 	/* Early ARM secure MP specific configuration */
 	bl	plat_cpu_reset_early
+	maybe_init_ca15_spectre_workaround
 
 	set_sctlr
 	isb
 
-	ldr	r0, =_start
+	ldr	r0, =reset_vect_table
 	write_vbar r0
 
 #if defined(CFG_WITH_ARM_TRUSTED_FW)
 	b	reset_primary
 #else
-	bl	get_core_pos
+	bl	__get_core_pos
 	cmp	r0, #0
 	beq	reset_primary
 	b	reset_secondary
 #endif
 UNWIND(	.fnend)
-END_FUNC reset
+END_FUNC _start
+KEEP_INIT _start
 
 	/*
 	 * Setup sp to point to the top of the tmp stack for the current CPU:
 	 * sp is assigned stack_tmp_export + cpu_id * stack_tmp_stride
 	 */
 	.macro set_sp
-		bl	get_core_pos
+		bl	__get_core_pos
 		cmp	r0, #CFG_TEE_CORE_NB_CORE
 		/* Unsupported CPU, park it before it breaks something */
 		bge	unhandled_cpu
@@ -490,7 +490,6 @@ shadow_stack_access_ok:
 UNWIND(	.fnend)
 END_FUNC reset_primary
 
-
 LOCAL_FUNC unhandled_cpu , :
 UNWIND(	.fnstart)
 	wfi
@@ -509,7 +508,7 @@ UNWIND(	.cantunwind)
 	set_sctlr
 	isb
 
-	ldr	r0, =_start
+	ldr	r0, =reset_vect_table
 	write_vbar r0
 
 	mov	r4, lr
@@ -529,12 +528,15 @@ UNWIND(	.cantunwind)
 	bx	r6
 UNWIND(	.fnend)
 END_FUNC cpu_on_handler
+KEEP_PAGER cpu_on_handler
 
 #else /* defined(CFG_WITH_ARM_TRUSTED_FW) */
 
 LOCAL_FUNC reset_secondary , :
 UNWIND(	.fnstart)
 UNWIND(	.cantunwind)
+	ldr	r0, =reset_vect_table
+	write_vbar r0
 
 	wait_primary
 

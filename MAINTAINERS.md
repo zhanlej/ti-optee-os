@@ -7,16 +7,17 @@ for these platforms.
      this is to diff against sections 3 in README.md  -->
 | Platform | Maintainer |
 |----------|------------|
-| Allwinner A80 Board			|`Sun Yangbang <sunny@allwinnertech.com>`|
 | ARM Juno Board			|`Linaro <op-tee@linaro.org>`|
 | Atmel ATSAMA5D2-XULT Board		|`Akshay Bhat <akshay.bhat@timesys.com>`|
 | NXP LS1021A				|`Sumit Garg <sumit.garg@nxp.com>`|
 | NXP LS1043A-RDB			|`Sumit Garg <sumit.garg@nxp.com>`|
 | NXP LS1046A-RDB			|`Sumit Garg <sumit.garg@nxp.com>`|
+| NXP LS1012A-RDB			|`Pankaj Gupta <pankaj.gupta@nxp.com>`|
 | FSL i.MX6 Quad SABRE Lite Board	|`Yan Yan <yan.yan@windriver.com>`,`Feng Yu <Yu.Feng@windriver.com>`|
 | FSL i.MX6 Quad SABRE SD Board		|`Yan Yan <yan.yan@windriver.com>`,`Feng Yu <Yu.Feng@windriver.com>`|
 | FSL i.MX6 UltraLite EVK Board		|`Peng Fan <peng.fan@nxp.com>`|
 | NXP i.MX6 ULL EVK Board		|`Peng Fan <peng.fan@nxp.com>`|
+| NXP i.MX6 SX Sabreauto Board		|`Peng Fan <peng.fan@nxp.com>`|
 | NXP i.MX7 Dual SabreSD Board		|`Peng Fan <peng.fan@nxp.com>`|
 | ARM Foundation FVP			|`Linaro <op-tee@linaro.org>`|
 | HiKey Board (HiSilicon Kirin 620)	|`Linaro <op-tee@linaro.org>`|
@@ -24,7 +25,9 @@ for these platforms.
 | HiSilicon D02				|`Linaro <op-tee@linaro.org>`|
 | Marvell Armada 70x0		|`Kevin Peng <kevinp@marvell.com>`|
 | Marvell Armada 80x0		|`Kevin Peng <kevinp@marvell.com>`|
+| Marvell Armada 3700		|`Kevin Peng <kevinp@marvell.com>`|
 | MediaTek MT8173 EVB Board		|`Linaro <op-tee@linaro.org>`|
+| Poplar Board (HiSilicon Hi3798C V200)	|`Linaro <op-tee@linaro.org>`|
 | QEMU					|`Linaro <op-tee@linaro.org>`|
 | Raspberry Pi3				|`Linaro <op-tee@linaro.org>`|
 | Renesas RCAR			|`Volodymyr Babchuk <vlad.babchuk@gmail.com>`|

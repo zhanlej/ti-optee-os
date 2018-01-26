@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: BSD-2-Clause
 /*
  * Copyright (c) 2014, STMicroelectronics International N.V.
  * All rights reserved.
@@ -195,7 +196,7 @@ static void raw_malloc_return_hook(void *p, size_t requested_size)
 
 void malloc_reset_stats(void)
 {
-	unsigned int exceptions = malloc_lock();
+	uint32_t exceptions = malloc_lock();
 
 	mstats.max_allocated = 0;
 	mstats.num_alloc_fail = 0;

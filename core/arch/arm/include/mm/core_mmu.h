@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: BSD-2-Clause */
 /*
  * Copyright (c) 2016, Linaro Limited
  * Copyright (c) 2014, STMicroelectronics International N.V.
@@ -28,13 +29,16 @@
 #ifndef CORE_MMU_H
 #define CORE_MMU_H
 
+#ifndef ASM
 #include <assert.h>
 #include <compiler.h>
 #include <kernel/user_ta.h>
 #include <mm/tee_mmu_types.h>
-#include <platform_config.h>
 #include <types_ext.h>
 #include <util.h>
+#endif
+
+#include <platform_config.h>
 
 /* A small page is the smallest unit of memory that can be mapped */
 #define SMALL_PAGE_SHIFT	12
@@ -75,6 +79,17 @@
 #endif
 
 /*
+ * CORE_MMU_L1_TBL_OFFSET is used when switching to/from reduced kernel
+ * mapping. The actual value depends on internals in core_mmu_lpae.c and
+ * core_mmu_v7.c which we rather not expose here. There's a compile time
+ * assertion to check that these magic numbers are correct.
+ */
+#ifdef CFG_WITH_LPAE
+#define CORE_MMU_L1_TBL_OFFSET		(CFG_TEE_CORE_NB_CORE * 4 * 8)
+#else
+#define CORE_MMU_L1_TBL_OFFSET		(4096 * 4)
+#endif
+/*
  * TEE_RAM_VA_START:            The start virtual address of the TEE RAM
  * TEE_TEXT_VA_START:           The start virtual address of the OP-TEE text
  */
@@ -90,6 +105,7 @@
 #define STACK_ALIGNMENT			(sizeof(long) * 2)
 #endif
 
+#ifndef ASM
 /*
  * Memory area type:
  * MEM_AREA_END:      Reserved, marks the end of a table of mapping areas.
@@ -98,6 +114,7 @@
  * MEM_AREA_TEE_RAM_RO:  core private read-only/non-executable memory (secure)
  * MEM_AREA_TEE_RAM_RW:  core private read/write/non-executable memory (secure)
  * MEM_AREA_TEE_COHERENT: teecore coherent RAM (secure, reserved to TEE)
+ * MEM_AREA_TEE_ASAN: core address sanitizer RAM (secure, reserved to TEE)
  * MEM_AREA_TA_RAM:   Secure RAM where teecore loads/exec TA instances.
  * MEM_AREA_NSEC_SHM: NonSecure shared RAM between NSec and TEE.
  * MEM_AREA_RAM_NSEC: NonSecure RAM storing data
@@ -116,6 +133,7 @@ enum teecore_memtypes {
 	MEM_AREA_TEE_RAM_RO,
 	MEM_AREA_TEE_RAM_RW,
 	MEM_AREA_TEE_COHERENT,
+	MEM_AREA_TEE_ASAN,
 	MEM_AREA_TA_RAM,
 	MEM_AREA_NSEC_SHM,
 	MEM_AREA_RAM_NSEC,
@@ -138,6 +156,7 @@ static inline const char *teecore_memtype_name(enum teecore_memtypes type)
 		[MEM_AREA_TEE_RAM_RX] = "TEE_RAM_RX",
 		[MEM_AREA_TEE_RAM_RO] = "TEE_RAM_RO",
 		[MEM_AREA_TEE_RAM_RW] = "TEE_RAM_RW",
+		[MEM_AREA_TEE_ASAN] = "TEE_ASAN",
 		[MEM_AREA_TEE_COHERENT] = "TEE_COHERENT",
 		[MEM_AREA_TA_RAM] = "TA_RAM",
 		[MEM_AREA_NSEC_SHM] = "NSEC_SHM",
@@ -215,9 +234,15 @@ struct core_mmu_phys_mem {
 		__register_memory1_ul(#addr, (type), (addr), (size), \
 				   phys_mem_map_section, __COUNTER__)
 
+#ifdef CFG_SECURE_DATA_PATH
 #define register_sdp_mem(addr, size) \
 		__register_memory1(#addr, MEM_AREA_SDP_MEM, (addr), (size), \
 				   phys_sdp_mem_section, __COUNTER__)
+#else
+#define register_sdp_mem(addr, size) \
+		static int CONCAT(__register_sdp_mem_unused, __COUNTER__) \
+			__unused
+#endif
 
 #define register_nsec_ddr(addr, size) \
 		__register_memory1(#addr, MEM_AREA_RAM_NSEC, (addr), (size), \
@@ -552,5 +577,7 @@ void core_mmu_set_discovered_nsec_ddr(struct core_mmu_phys_mem *start,
 /* Alloc and fill SDP memory objects table - table is NULL terminated */
 struct mobj **core_sdp_mem_create_mobjs(void);
 #endif
+
+#endif /*ASM*/
 
 #endif /* CORE_MMU_H */

@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: BSD-2-Clause */
 /*
  * Copyright (c) 2014, STMicroelectronics International N.V.
  * All rights reserved.
@@ -57,8 +58,13 @@
 
 #define TEE_MATTR_LOCKED		(1 << 15)
 
+#ifdef CFG_CORE_UNMAP_CORE_AT_EL0
+#define TEE_MMU_UMAP_KCODE_IDX	0
+#define TEE_MMU_UMAP_STACK_IDX	1
+#else
 #define TEE_MMU_UMAP_STACK_IDX	0
-#define TEE_MMU_UMAP_CODE_IDX	1
+#endif /*CFG_CORE_UNMAP_CORE_AT_EL0*/
+#define TEE_MMU_UMAP_CODE_IDX	(TEE_MMU_UMAP_STACK_IDX + 1)
 #define TEE_MMU_UMAP_NUM_CODE_SEGMENTS	3
 
 #define TEE_MMU_UMAP_PARAM_IDX		(TEE_MMU_UMAP_CODE_IDX + \
@@ -87,17 +93,21 @@ struct tee_mmu_info {
 	struct tee_ta_region regions[TEE_MMU_UMAP_MAX_ENTRIES];
 	vaddr_t ta_private_vmem_start;
 	vaddr_t ta_private_vmem_end;
+	unsigned int asid;
 };
 
-static inline void mattr_uflags_to_str(char *str, size_t size, uint32_t attr)
+static inline void mattr_perm_to_str(char *str, size_t size, uint32_t attr)
 {
-	if (size < 4)
+	if (size < 7)
 		return;
 
 	str[0] = (attr & TEE_MATTR_UR) ? 'r' : '-';
 	str[1] = (attr & TEE_MATTR_UW) ? 'w' : '-';
 	str[2] = (attr & TEE_MATTR_UX) ? 'x' : '-';
-	str[3] = '\0';
+	str[3] = (attr & TEE_MATTR_PR) ? 'R' : '-';
+	str[4] = (attr & TEE_MATTR_PW) ? 'W' : '-';
+	str[5] = (attr & TEE_MATTR_PX) ? 'X' : '-';
+	str[6] = '\0';
 }
 
 #endif

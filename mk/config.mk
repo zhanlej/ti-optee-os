@@ -44,16 +44,14 @@ WARNS ?= 3
 # so assertions are disabled.
 CFG_TEE_CORE_DEBUG ?= y
 
-# Max level of the tee core traces. 0 means disable, 4 is max.
-# Supported values: 0 (no traces) to 4 (all traces)
-# If CFG_TEE_DRV_DEBUGFS is set, the level of traces to print can be
-# dynamically changes via debugfs in the range 1 => CFG_TEE_CORE_LOG_LEVEL
+# Log levels for the TEE core and user-mode TAs
+# Defines which messages are displayed on the secure console
+# 0: none
+# 1: error
+# 2: error + warning
+# 3: error + warning + debug
+# 4: error + warning + debug + flow
 CFG_TEE_CORE_LOG_LEVEL ?= 1
-
-# TA and TEECore log level
-# Supported values: 0 (no traces) to 4 (all traces)
-# If CFG_TEE_DRV_DEBUGFS is set, the level of traces to print can be
-# dynamically changes via debugfs in the range 1 => CFG_TEE_TA_LOG_LEVEL
 CFG_TEE_TA_LOG_LEVEL ?= 1
 
 # TA enablement
@@ -92,14 +90,23 @@ CFG_TEE_API_VERSION ?= GPD-1.1-dev
 # Implementation description (implementation-dependent)
 CFG_TEE_IMPL_DESCR ?= OPTEE
 
+# Should OPTEE_SMC_CALL_GET_OS_REVISION return a build identifier to Normal
+# World?
+CFG_OS_REV_REPORTS_GIT_SHA1 ?= y
+
 # Trusted OS implementation version
 TEE_IMPL_VERSION ?= $(shell git describe --always --dirty=-dev 2>/dev/null || echo Unknown)
+ifeq ($(CFG_OS_REV_REPORTS_GIT_SHA1),y)
+TEE_IMPL_GIT_SHA1 := 0x$(shell git rev-parse --short=8 HEAD 2>/dev/null || echo 0)
+else
+TEE_IMPL_GIT_SHA1 := 0x0
+endif
 # The following values are not extracted from the "git describe" output because
 # we might be outside of a Git environment, or the tree may have been cloned
 # with limited depth not including any tag, so there is really no guarantee
 # that TEE_IMPL_VERSION contains the major and minor revision numbers.
-CFG_OPTEE_REVISION_MAJOR ?= 2
-CFG_OPTEE_REVISION_MINOR ?= 6
+CFG_OPTEE_REVISION_MAJOR ?= 3
+CFG_OPTEE_REVISION_MINOR ?= 0
 
 # Trusted OS implementation manufacturer name
 CFG_TEE_MANUFACTURER ?= LINARO
@@ -261,6 +268,16 @@ CFG_GP_SOCKETS ?= y
 # Enable Secure Data Path support in OP-TEE core (TA may be invoked with
 # invocation parameters referring to specific secure memories).
 CFG_SECURE_DATA_PATH ?= n
+
+# Enable storage for TAs in secure storage, depends on CFG_REE_FS=y
+# TA binaries are stored encrypted in the REE FS and are protected by
+# metadata in secure storage.
+CFG_SECSTOR_TA ?= $(call cfg-all-enabled,CFG_REE_FS CFG_WITH_USER_TA)
+$(eval $(call cfg-depends-all,CFG_SECSTOR_TA,CFG_REE_FS CFG_WITH_USER_TA))
+
+# Enable the pseudo TA that managages TA storage in secure storage
+CFG_SECSTOR_TA_MGMT_PTA ?= $(call cfg-all-enabled,CFG_SECSTOR_TA)
+$(eval $(call cfg-depends-all,CFG_SECSTOR_TA_MGMT_PTA,CFG_SECSTOR_TA))
 
 # Define the number of cores per cluster used in calculating core position.
 # The cluster number is shifted by this value and added to the core ID,

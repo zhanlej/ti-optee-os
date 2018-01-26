@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: BSD-2-Clause */
 /*
  * Copyright (c) 2014, STMicroelectronics International N.V.
  * All rights reserved.
@@ -50,7 +51,7 @@ void tee_mmu_map_stack(struct user_ta_ctx *utc, struct mobj *mobj);
 TEE_Result tee_mmu_map_add_segment(struct user_ta_ctx *utc, struct mobj *mobj,
 				   size_t offs, size_t size, uint32_t prot);
 
-void tee_mmu_map_clear(struct user_ta_ctx *utc);
+void tee_mmu_map_init(struct user_ta_ctx *utc);
 
 /* Map parameters for a user TA */
 TEE_Result tee_mmu_map_param(struct user_ta_ctx *utc,

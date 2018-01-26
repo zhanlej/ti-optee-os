@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: BSD-2-Clause */
 /*
  * Copyright (c) 2014, STMicroelectronics International N.V.
  * All rights reserved.
@@ -184,5 +185,13 @@
 #define __compiler_mul_overflow(a, b, res) __INTOF_MUL(*(res), (a), (b))
 
 #endif /*!__HAVE_BUILTIN_OVERFLOW*/
+
+#define __compiler_compare_and_swap(p, oval, nval) \
+	__atomic_compare_exchange_n((p), (oval), (nval), true, \
+				    __ATOMIC_ACQUIRE, __ATOMIC_RELAXED) \
+
+#define __compiler_atomic_load(p) __atomic_load_n((p), __ATOMIC_RELAXED)
+#define __compiler_atomic_store(p, val) \
+	__atomic_store_n((p), (val), __ATOMIC_RELAXED)
 
 #endif /*COMPILER_H*/

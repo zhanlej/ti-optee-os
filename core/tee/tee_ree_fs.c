@@ -1,28 +1,6 @@
+// SPDX-License-Identifier: BSD-2-Clause
 /*
  * Copyright (c) 2015, Linaro Limited
- * All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice,
- * this list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- * this list of conditions and the following disclaimer in the documentation
- * and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
- * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
- * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
- * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
- * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
- * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
  */
 
 #include <assert.h>
@@ -38,7 +16,6 @@
 #include <sys/queue.h>
 #include <tee/fs_dirfile.h>
 #include <tee/fs_htree.h>
-#include <tee/tee_cryp_provider.h>
 #include <tee/tee_fs.h>
 #include <tee/tee_fs_rpc.h>
 #include <tee/tee_pobj.h>
@@ -142,6 +119,10 @@ static TEE_Result get_offs_size(enum tee_fs_htree_type type, size_t idx,
 
 	/*
 	 * File layout
+	 * [demo with input:
+	 * BLOCK_SIZE = 4096,
+	 * node_size = 66,
+	 * block_nodes = 4096/(66*2) = 31 ]
 	 *
 	 * phys block 0:
 	 * tee_fs_htree_image vers 0 @ offs = 0
@@ -153,8 +134,8 @@ static TEE_Result get_offs_size(enum tee_fs_htree_type type, size_t idx,
 	 * tee_fs_htree_node_image 1  vers 0 @ offs = node_size * 2
 	 * tee_fs_htree_node_image 1  vers 1 @ offs = node_size * 3
 	 * ...
-	 * tee_fs_htree_node_image 61 vers 0 @ offs = node_size * 122
-	 * tee_fs_htree_node_image 61 vers 1 @ offs = node_size * 123
+	 * tee_fs_htree_node_image 30 vers 0 @ offs = node_size * 60
+	 * tee_fs_htree_node_image 30 vers 1 @ offs = node_size * 61
 	 *
 	 * phys block 2:
 	 * data block 0 vers 0
@@ -163,21 +144,26 @@ static TEE_Result get_offs_size(enum tee_fs_htree_type type, size_t idx,
 	 * data block 0 vers 1
 	 *
 	 * ...
+	 * phys block 62:
+	 * data block 30 vers 0
+	 *
 	 * phys block 63:
-	 * data block 61 vers 0
+	 * data block 30 vers 1
 	 *
 	 * phys block 64:
-	 * data block 61 vers 1
+	 * tee_fs_htree_node_image 31  vers 0 @ offs = 0
+	 * tee_fs_htree_node_image 31  vers 1 @ offs = node_size
+	 * tee_fs_htree_node_image 32  vers 0 @ offs = node_size * 2
+	 * tee_fs_htree_node_image 32  vers 1 @ offs = node_size * 3
+	 * ...
+	 * tee_fs_htree_node_image 61 vers 0 @ offs = node_size * 60
+	 * tee_fs_htree_node_image 61 vers 1 @ offs = node_size * 61
 	 *
 	 * phys block 65:
-	 * tee_fs_htree_node_image 62  vers 0 @ offs = 0
-	 * tee_fs_htree_node_image 62  vers 1 @ offs = node_size
-	 * tee_fs_htree_node_image 63  vers 0 @ offs = node_size * 2
-	 * tee_fs_htree_node_image 63  vers 1 @ offs = node_size * 3
-	 * ...
-	 * tee_fs_htree_node_image 121 vers 0 @ offs = node_size * 122
-	 * tee_fs_htree_node_image 121 vers 1 @ offs = node_size * 123
+	 * data block 31 vers 0
 	 *
+	 * phys block 66:
+	 * data block 31 vers 1
 	 * ...
 	 */
 

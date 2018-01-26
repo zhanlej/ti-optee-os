@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: BSD-2-Clause */
 /*
  * Copyright (c) 2014, STMicroelectronics International N.V.
  * Copyright (c) 2016-2017, Linaro Limited
@@ -53,21 +54,21 @@
  */
 #define THREAD_CORE_LOCAL_ALIGNED __aligned(16)
 #else
-#define THREAD_CORE_LOCAL_ALIGNED
+#define THREAD_CORE_LOCAL_ALIGNED __aligned(8)
 #endif
 
 struct thread_core_local {
-	vaddr_t tmp_stack_va_end;
-	int curr_thread;
-	uint32_t flags;
-	vaddr_t abt_stack_va_end;
 #ifdef ARM32
-	paddr_t sm_pm_ctx_phys;
 	uint32_t r[2];
+	paddr_t sm_pm_ctx_phys;
 #endif
 #ifdef ARM64
 	uint64_t x[4];
 #endif
+	vaddr_t tmp_stack_va_end;
+	int curr_thread;
+	uint32_t flags;
+	vaddr_t abt_stack_va_end;
 #ifdef CFG_TEE_CORE_DEBUG
 	unsigned int locked_count; /* Number of spinlocks held */
 #endif
@@ -516,6 +517,13 @@ void thread_unwind_user_mode(uint32_t ret, uint32_t exit_status0,
  */
 vaddr_t thread_get_saved_thread_sp(void);
 #endif /*ARM64*/
+
+/*
+ * Provides addresses and size of kernel code that must be mapped while in
+ * user mode.
+ */
+void thread_get_user_kcode(struct mobj **mobj, size_t *offset,
+			  vaddr_t *va, size_t *sz);
 
 /*
  * Returns the start address (bottom) of the stack for the current thread,

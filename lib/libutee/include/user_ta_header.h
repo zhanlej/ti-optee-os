@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: BSD-2-Clause */
 /*
  * Copyright (c) 2014, STMicroelectronics International N.V.
  * All rights reserved.
@@ -39,6 +40,11 @@
 #define TA_FLAG_SECURE_DATA_PATH	(1 << 5) /* accesses SDP memory */
 #define TA_FLAG_REMAP_SUPPORT		(1 << 6) /* use map/unmap syscalls */
 #define TA_FLAG_CACHE_MAINTENANCE	(1 << 7) /* use cache flush syscall */
+	/*
+	 * TA instance can execute multiple sessions concurrently
+	 * (pseudo-TAs only).
+	 */
+#define TA_FLAG_CONCURRENT		(1 << 8)
 
 union ta_head_func_ptr {
 	uint64_t ptr64;

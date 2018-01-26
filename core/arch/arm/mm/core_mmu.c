@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: BSD-2-Clause
 /*
  * Copyright (c) 2016, Linaro Limited
  * Copyright (c) 2014, STMicroelectronics International N.V.
@@ -90,15 +91,22 @@ register_sdp_mem(CFG_TEE_SDP_MEM_BASE, CFG_TEE_SDP_MEM_SIZE);
 #endif
 
 #ifdef CFG_CORE_RWDATA_NOEXEC
+register_phys_mem_ul(MEM_AREA_TEE_RAM_RO, CFG_TEE_RAM_START,
+		     VCORE_UNPG_RX_PA - CFG_TEE_RAM_START);
 register_phys_mem_ul(MEM_AREA_TEE_RAM_RX, VCORE_UNPG_RX_PA, VCORE_UNPG_RX_SZ);
 register_phys_mem_ul(MEM_AREA_TEE_RAM_RO, VCORE_UNPG_RO_PA, VCORE_UNPG_RO_SZ);
 register_phys_mem_ul(MEM_AREA_TEE_RAM_RW, VCORE_UNPG_RW_PA, VCORE_UNPG_RW_SZ);
 #ifdef CFG_WITH_PAGER
 register_phys_mem_ul(MEM_AREA_TEE_RAM_RX, VCORE_INIT_RX_PA, VCORE_INIT_RX_SZ);
 register_phys_mem_ul(MEM_AREA_TEE_RAM_RO, VCORE_INIT_RO_PA, VCORE_INIT_RO_SZ);
-#endif
-#else
+#endif /*CFG_WITH_PAGER*/
+#else /*!CFG_CORE_RWDATA_NOEXEC*/
 register_phys_mem(MEM_AREA_TEE_RAM, CFG_TEE_RAM_START, CFG_TEE_RAM_PH_SIZE);
+#endif /*!CFG_CORE_RWDATA_NOEXEC*/
+
+#if defined(CFG_CORE_SANITIZE_KADDRESS) && defined(CFG_WITH_PAGER)
+/* Asan ram is part of MEM_AREA_TEE_RAM_RW when pager is disabled */
+register_phys_mem_ul(MEM_AREA_TEE_ASAN, ASAN_MAP_PA, ASAN_MAP_SZ);
 #endif
 
 register_phys_mem(MEM_AREA_TA_RAM, CFG_TA_RAM_START, CFG_TA_RAM_SIZE);
@@ -583,7 +591,7 @@ static void add_va_space(struct tee_mmap_region *memory_map, size_t num_elems,
 
 uint32_t core_mmu_type_to_attr(enum teecore_memtypes t)
 {
-	const uint32_t attr = TEE_MATTR_VALID_BLOCK | TEE_MATTR_GLOBAL;
+	const uint32_t attr = TEE_MATTR_VALID_BLOCK;
 	const uint32_t cached = TEE_MATTR_CACHE_CACHED << TEE_MATTR_CACHE_SHIFT;
 	const uint32_t noncache = TEE_MATTR_CACHE_NONCACHE <<
 				  TEE_MATTR_CACHE_SHIFT;
@@ -596,6 +604,7 @@ uint32_t core_mmu_type_to_attr(enum teecore_memtypes t)
 	case MEM_AREA_TEE_RAM_RO:
 		return attr | TEE_MATTR_SECURE | TEE_MATTR_PR | cached;
 	case MEM_AREA_TEE_RAM_RW:
+	case MEM_AREA_TEE_ASAN:
 		return attr | TEE_MATTR_SECURE | TEE_MATTR_PRW | cached;
 	case MEM_AREA_TEE_COHERENT:
 		return attr | TEE_MATTR_SECURE | TEE_MATTR_PRWX | noncache;
@@ -628,6 +637,7 @@ static bool __maybe_unused map_is_tee_ram(const struct tee_mmap_region *mm)
 	case MEM_AREA_TEE_RAM_RX:
 	case MEM_AREA_TEE_RAM_RO:
 	case MEM_AREA_TEE_RAM_RW:
+	case MEM_AREA_TEE_ASAN:
 		return true;
 	default:
 		return false;
@@ -932,6 +942,7 @@ void core_init_mmu_map(void)
 				panic("NS_SHM can't fit in nsec_shared");
 			break;
 		case MEM_AREA_TEE_COHERENT:
+		case MEM_AREA_TEE_ASAN:
 		case MEM_AREA_IO_SEC:
 		case MEM_AREA_IO_NSEC:
 		case MEM_AREA_RAM_SEC:
