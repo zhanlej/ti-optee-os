@@ -34,9 +34,11 @@ void arm_cl2_config(vaddr_t pl310);
 void arm_cl2_enable(vaddr_t pl310);
 
 #if defined(CFG_BOOT_SECONDARY_REQUEST)
-extern paddr_t ns_entry_addrs[];
+void generic_boot_set_core_ns_entry(size_t core_idx, uintptr_t entry,
+				    uintptr_t context_id);
+
 int generic_boot_core_release(size_t core_idx, paddr_t entry);
-paddr_t generic_boot_core_hpen(void);
+struct ns_entry_context *generic_boot_core_hpen(void);
 #endif
 
 void *get_dt_blob(void);
