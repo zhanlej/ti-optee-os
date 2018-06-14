@@ -2,29 +2,6 @@
 /*
  * Copyright (c) 2016, Linaro Limited
  * Copyright (c) 2014, STMicroelectronics International N.V.
- * All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice,
- * this list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- * this list of conditions and the following disclaimer in the documentation
- * and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
- * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
- * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
- * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
- * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
- * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
  */
 
 #include <arm.h>
@@ -33,6 +10,7 @@
 #include <kernel/generic_boot.h>
 #include <kernel/linker.h>
 #include <kernel/panic.h>
+#include <kernel/spinlock.h>
 #include <kernel/tlb_helpers.h>
 #include <kernel/tee_l2cc_mutex.h>
 #include <kernel/tee_misc.h>
@@ -86,16 +64,21 @@ static struct memaccess_area secure_only[] = {
 };
 
 static struct memaccess_area nsec_shared[] = {
-	MEMACCESS_AREA(CFG_SHMEM_START, CFG_SHMEM_SIZE),
+	MEMACCESS_AREA(TEE_SHMEM_START, TEE_SHMEM_SIZE),
 };
 
+#if defined(CFG_SECURE_DATA_PATH)
 #ifdef CFG_TEE_SDP_MEM_BASE
 register_sdp_mem(CFG_TEE_SDP_MEM_BASE, CFG_TEE_SDP_MEM_SIZE);
 #endif
+#ifdef TEE_SDP_TEST_MEM_BASE
+register_sdp_mem(TEE_SDP_TEST_MEM_BASE, TEE_SDP_TEST_MEM_SIZE);
+#endif
+#endif
 
 #ifdef CFG_CORE_RWDATA_NOEXEC
-register_phys_mem_ul(MEM_AREA_TEE_RAM_RO, CFG_TEE_RAM_START,
-		     VCORE_UNPG_RX_PA - CFG_TEE_RAM_START);
+register_phys_mem_ul(MEM_AREA_TEE_RAM_RO, TEE_RAM_START,
+		     VCORE_UNPG_RX_PA - TEE_RAM_START);
 register_phys_mem_ul(MEM_AREA_TEE_RAM_RX, VCORE_UNPG_RX_PA, VCORE_UNPG_RX_SZ);
 register_phys_mem_ul(MEM_AREA_TEE_RAM_RO, VCORE_UNPG_RO_PA, VCORE_UNPG_RO_SZ);
 register_phys_mem_ul(MEM_AREA_TEE_RAM_RW, VCORE_UNPG_RW_PA, VCORE_UNPG_RW_SZ);
@@ -104,7 +87,7 @@ register_phys_mem_ul(MEM_AREA_TEE_RAM_RX, VCORE_INIT_RX_PA, VCORE_INIT_RX_SZ);
 register_phys_mem_ul(MEM_AREA_TEE_RAM_RO, VCORE_INIT_RO_PA, VCORE_INIT_RO_SZ);
 #endif /*CFG_WITH_PAGER*/
 #else /*!CFG_CORE_RWDATA_NOEXEC*/
-register_phys_mem(MEM_AREA_TEE_RAM, CFG_TEE_RAM_START, CFG_TEE_RAM_PH_SIZE);
+register_phys_mem(MEM_AREA_TEE_RAM, TEE_RAM_START, TEE_RAM_PH_SIZE);
 #endif /*!CFG_CORE_RWDATA_NOEXEC*/
 
 #if defined(CFG_CORE_SANITIZE_KADDRESS) && defined(CFG_WITH_PAGER)
@@ -112,8 +95,20 @@ register_phys_mem(MEM_AREA_TEE_RAM, CFG_TEE_RAM_START, CFG_TEE_RAM_PH_SIZE);
 register_phys_mem_ul(MEM_AREA_TEE_ASAN, ASAN_MAP_PA, ASAN_MAP_SZ);
 #endif
 
-register_phys_mem(MEM_AREA_TA_RAM, CFG_TA_RAM_START, CFG_TA_RAM_SIZE);
-register_phys_mem(MEM_AREA_NSEC_SHM, CFG_SHMEM_START, CFG_SHMEM_SIZE);
+register_phys_mem(MEM_AREA_TA_RAM, TA_RAM_START, TA_RAM_SIZE);
+register_phys_mem(MEM_AREA_NSEC_SHM, TEE_SHMEM_START, TEE_SHMEM_SIZE);
+
+static unsigned int mmu_spinlock;
+
+static uint32_t mmu_lock(void)
+{
+	return cpu_spin_lock_xsave(&mmu_spinlock);
+}
+
+static void mmu_unlock(uint32_t exceptions)
+{
+	cpu_spin_unlock_xrestore(&mmu_spinlock, exceptions);
+}
 
 static bool _pbuf_intersects(struct memaccess_area *a, size_t alen,
 			     paddr_t pa, size_t size)
@@ -755,7 +750,7 @@ static void dump_xlat_table(vaddr_t va __unused, int level __unused)
 static void add_pager_vaspace(struct tee_mmap_region *mmap, size_t num_elems,
 			      vaddr_t begin, vaddr_t *end, size_t *last)
 {
-	size_t size = CFG_TEE_RAM_VA_SIZE - (*end - begin);
+	size_t size = TEE_RAM_VA_SIZE - (*end - begin);
 	size_t n;
 	size_t pos = 0;
 
@@ -892,7 +887,7 @@ static void init_mem_map(struct tee_mmap_region *memory_map, size_t num_elems)
 		end = MAX(end, ROUNDUP(map->va + map->size, map->region_size));
 	}
 	assert(va >= TEE_RAM_VA_START);
-	assert(end <= TEE_RAM_VA_START + CFG_TEE_RAM_VA_SIZE);
+	assert(end <= TEE_RAM_VA_START + TEE_RAM_VA_SIZE);
 
 	add_pager_vaspace(memory_map, num_elems, va, &end, &last);
 
@@ -1038,14 +1033,14 @@ bool core_pbuf_is(uint32_t attr, paddr_t pbuf, size_t len)
 		return pbuf_is_inside(nsec_shared, pbuf, len) ||
 			pbuf_is_nsec_ddr(pbuf, len);
 	case CORE_MEM_TEE_RAM:
-		return core_is_buffer_inside(pbuf, len, CFG_TEE_RAM_START,
-							CFG_TEE_RAM_PH_SIZE);
+		return core_is_buffer_inside(pbuf, len, TEE_RAM_START,
+							TEE_RAM_PH_SIZE);
 	case CORE_MEM_TA_RAM:
-		return core_is_buffer_inside(pbuf, len, CFG_TA_RAM_START,
-							CFG_TA_RAM_SIZE);
+		return core_is_buffer_inside(pbuf, len, TA_RAM_START,
+							TA_RAM_SIZE);
 	case CORE_MEM_NSEC_SHM:
-		return core_is_buffer_inside(pbuf, len, CFG_SHMEM_START,
-							CFG_SHMEM_SIZE);
+		return core_is_buffer_inside(pbuf, len, TEE_SHMEM_START,
+							TEE_SHMEM_SIZE);
 	case CORE_MEM_SDP_MEM:
 		return pbuf_is_sdp_mem(pbuf, len);
 	case CORE_MEM_CACHED:
@@ -1429,6 +1424,7 @@ TEE_Result core_mmu_map_pages(vaddr_t vstart, paddr_t *pages, size_t num_pages,
 	struct tee_mmap_region *mm;
 	unsigned int idx;
 	uint32_t old_attr;
+	uint32_t exceptions;
 	vaddr_t vaddr = vstart;
 	size_t i;
 	bool secure;
@@ -1439,6 +1435,8 @@ TEE_Result core_mmu_map_pages(vaddr_t vstart, paddr_t *pages, size_t num_pages,
 
 	if (vaddr & SMALL_PAGE_MASK)
 		return TEE_ERROR_BAD_PARAMETERS;
+
+	exceptions = mmu_lock();
 
 	mm = find_map_by_va((void *)vaddr);
 	if (!mm || !va_is_in_map(mm, vaddr + num_pages * SMALL_PAGE_SIZE - 1))
@@ -1482,9 +1480,12 @@ TEE_Result core_mmu_map_pages(vaddr_t vstart, paddr_t *pages, size_t num_pages,
 	 * guaranteed that there's no valid mapping in this range.
 	 */
 	dsb_ishst();
+	mmu_unlock(exceptions);
 
 	return TEE_SUCCESS;
 err:
+	mmu_unlock(exceptions);
+
 	if (i)
 		core_mmu_unmap_pages(vstart, i);
 
@@ -1497,6 +1498,9 @@ void core_mmu_unmap_pages(vaddr_t vstart, size_t num_pages)
 	struct tee_mmap_region *mm;
 	size_t i;
 	unsigned int idx;
+	uint32_t exceptions;
+
+	exceptions = mmu_lock();
 
 	mm = find_map_by_va((void *)vstart);
 	if (!mm || !va_is_in_map(mm, vstart + num_pages * SMALL_PAGE_SIZE - 1))
@@ -1516,6 +1520,8 @@ void core_mmu_unmap_pages(vaddr_t vstart, size_t num_pages)
 		core_mmu_set_entry(&tbl_info, idx, 0, 0);
 	}
 	tlbi_all();
+
+	mmu_unlock(exceptions);
 }
 
 void core_mmu_populate_user_map(struct core_mmu_table_info *dir_info,
@@ -1794,7 +1800,7 @@ static void *phys_to_virt_ta_vaspace(paddr_t pa)
 #ifdef CFG_WITH_PAGER
 static void *phys_to_virt_tee_ram(paddr_t pa)
 {
-	if (pa >= CFG_TEE_LOAD_ADDR && pa < get_linear_map_end())
+	if (pa >= TEE_LOAD_ADDR && pa < get_linear_map_end())
 		return (void *)(vaddr_t)pa;
 	return tee_pager_phys_to_virt(pa);
 }

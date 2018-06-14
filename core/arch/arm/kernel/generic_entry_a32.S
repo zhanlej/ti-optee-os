@@ -243,6 +243,12 @@ UNWIND(	.cantunwind)
 
 	bootargs_entry
 
+	/*
+	 * 32bit entry is expected to execute Supervisor mode,
+	 * some bootloader may enter in Supervisor or Monitor
+	 */
+	cps	#CPSR_MODE_SVC
+
 	/* Early ARM secure MP specific configuration */
 	bl	plat_cpu_reset_early
 	maybe_init_spectre_workaround
@@ -290,7 +296,7 @@ KEEP_INIT _start
 	 * Use ANSI #define to trap source file line number for PL310 assertion
 	 */
 	.macro __inval_cache_vrange vbase, vend, line
-#ifdef CFG_PL310
+#if defined(CFG_PL310) && !defined(CFG_PL310_SIP_PROTOCOL)
 		assert_flat_mapped_range (\vbase), (\line)
 		bl	pl310_base
 		ldr	r1, =(\vbase)
@@ -304,7 +310,7 @@ KEEP_INIT _start
 	.endm
 
 	.macro __flush_cache_vrange vbase, vend, line
-#ifdef CFG_PL310
+#if defined(CFG_PL310) && !defined(CFG_PL310_SIP_PROTOCOL)
 		assert_flat_mapped_range (\vbase), (\line)
 		ldr	r0, =(\vbase)
 		ldr	r1, =(\vend)
@@ -430,7 +436,7 @@ shadow_stack_access_ok:
 	inval_cache_vrange(__text_start, __end)
 #endif
 
-#ifdef CFG_PL310
+#if defined(CFG_PL310) && !defined(CFG_PL310_SIP_PROTOCOL)
 	/* Enable PL310 if not yet enabled */
 	bl	pl310_base
 	bl	arm_cl2_enable
@@ -467,6 +473,9 @@ shadow_stack_access_ok:
 	wait_secondary
 
 #ifdef CFG_PL310_LOCKED
+#ifdef CFG_PL310_SIP_PROTOCOL
+#error "CFG_PL310_LOCKED must not be defined when CFG_PL310_SIP_PROTOCOL=y"
+#endif
 	/* lock/invalidate all lines: pl310 behaves as if disable */
 	bl	pl310_base
 	bl	arm_cl2_lockallways

@@ -77,6 +77,10 @@ KEEP_PAGER(sem_cpu_sync);
 static void *dt_blob_addr;
 #endif
 
+#ifdef CFG_SECONDARY_INIT_CNTFRQ
+static uint32_t cntfrq;
+#endif
+
 /* May be overridden in plat-$(PLATFORM)/main.c */
 __weak void plat_cpu_reset_late(void)
 {
@@ -166,6 +170,33 @@ static void init_vfp_sec(void)
 }
 #endif
 
+#ifdef CFG_SECONDARY_INIT_CNTFRQ
+static void primary_save_cntfrq(void)
+{
+	assert(cntfrq == 0);
+
+	/*
+	 * CNTFRQ should be initialized on the primary CPU by a
+	 * previous boot stage
+	 */
+	cntfrq = read_cntfrq();
+}
+
+static void secondary_init_cntfrq(void)
+{
+	assert(cntfrq != 0);
+	write_cntfrq(cntfrq);
+}
+#else /* CFG_SECONDARY_INIT_CNTFRQ */
+static void primary_save_cntfrq(void)
+{
+}
+
+static void secondary_init_cntfrq(void)
+{
+}
+#endif
+
 #ifdef CFG_CORE_SANITIZE_KADDRESS
 static void init_run_constructors(void)
 {
@@ -189,7 +220,7 @@ static void init_asan(void)
 	 */
 
 #define __ASAN_SHADOW_START \
-	ROUNDUP(TEE_RAM_VA_START + (CFG_TEE_RAM_VA_SIZE * 8) / 9 - 8, 8)
+	ROUNDUP(TEE_RAM_VA_START + (TEE_RAM_VA_SIZE * 8) / 9 - 8, 8)
 	assert(__ASAN_SHADOW_START == (vaddr_t)&__asan_shadow_start);
 #define __CFG_ASAN_SHADOW_OFFSET \
 	(__ASAN_SHADOW_START - (TEE_RAM_VA_START / 8))
@@ -270,7 +301,7 @@ static void carve_out_asan_mem(tee_mm_pool_t *pool __unused)
 static void init_vcore(tee_mm_pool_t *mm_vcore)
 {
 	const vaddr_t begin = TEE_RAM_VA_START;
-	vaddr_t end = TEE_RAM_VA_START + CFG_TEE_RAM_VA_SIZE;
+	vaddr_t end = TEE_RAM_VA_START + TEE_RAM_VA_SIZE;
 
 #ifdef CFG_CORE_SANITIZE_KADDRESS
 	/* Carve out asan memory, flat maped after core memory */
@@ -864,6 +895,7 @@ static void init_primary_helper(unsigned long pageable_part,
 	 * its functions.
 	 */
 	thread_set_exceptions(THREAD_EXCP_ALL);
+	primary_save_cntfrq();
 	init_vfp_sec();
 	init_runtime(pageable_part);
 
@@ -899,6 +931,7 @@ static void init_secondary_helper(unsigned long nsec_entry)
 	 */
 	thread_set_exceptions(THREAD_EXCP_ALL);
 
+	secondary_init_cntfrq();
 	thread_init_per_cpu();
 	init_sec_mon(nsec_entry);
 	main_secondary_init_gic();
