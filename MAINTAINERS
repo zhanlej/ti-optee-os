@@ -41,6 +41,11 @@ R:	Linaro <op-tee@linaro.org>
 S:	Maintained
 F:	core/arch/arm/plat-vexpress/
 
+AllWinner sun8i H2+
+R:	Ying-Chun Liu (PaulLiu) <paul.liu@linaro.org> [@grandpaul]
+S:	Maintained
+F:	core/arch/arm/plat-sunxi/
+
 Atmel ATSAMA5D2-XULT
 R:	Akshay Bhat <akshay.bhat@timesys.com> [@nodeax]
 S:	Maintained
@@ -131,6 +136,11 @@ STMicroelectronics b2260-h410, b2120-h310/h410
 R:	Linaro <op-tee@linaro.org>
 S:	Maintained
 F:	core/arch/arm/plat-stm/
+
+STMicroelectronics stm32mp1
+R:	Etienne Carriere <etienne.carriere@st.com>
+S:	Maintained
+F:	core/arch/arm/plat-stm32mp1/
 
 Texas Instruments AM43xx, AM57xx, DRA7xx, AM65x
 R:	Andrew F. Davis <afd@ti.com>

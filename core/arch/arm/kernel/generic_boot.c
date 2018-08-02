@@ -407,7 +407,7 @@ static void init_runtime(unsigned long pageable_part)
 	mm = tee_mm_alloc2(&tee_mm_vcore,
 		(vaddr_t)tee_mm_vcore.hi - TZSRAM_SIZE, TZSRAM_SIZE);
 	assert(mm);
-	tee_pager_init(mm);
+	tee_pager_set_alias_area(mm);
 
 	/*
 	 * Claim virtual memory which isn't paged.
@@ -869,7 +869,7 @@ static void discover_nsec_memory(void)
 	}
 
 	nelems = (&__end_phys_ddr_overall_section -
-		  &__start_phys_ddr_overall_section) / sizeof(*mem);
+		  &__start_phys_ddr_overall_section);
 	if (!nelems)
 		return;
 

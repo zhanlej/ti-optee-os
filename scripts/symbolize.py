@@ -200,8 +200,12 @@ class Symbolizer(object):
                 addr, size, _, name = line.split()
             except:
                 # Size is missing
-                addr, _, name = line.split()
-                size = '0'
+                try:
+                    addr, _, name = line.split()
+                    size = '0'
+                except:
+                    # E.g., undefined (external) symbols (line = "U symbol")
+                    continue
             iaddr = int(addr, 16)
             isize = int(size, 16)
             if iaddr == ireladdr:
@@ -390,13 +394,14 @@ class Symbolizer(object):
                     for k in self._elfs:
                         e = self._elfs[k]
                         if (len(e) >= 3):
+                            # TA executable or library
                             self._out.write(e[2].strip())
-                        elf = self.get_elf(e[0])
-                        if elf:
-                            rpath = os.path.realpath(elf)
-                            path = self.pretty_print_path(rpath)
-                            self._out.write(' (' + path + ')')
-                        self._out.write('\n')
+                            elf = self.get_elf(e[0])
+                            if elf:
+                                rpath = os.path.realpath(elf)
+                                path = self.pretty_print_path(rpath)
+                                self._out.write(' (' + path + ')')
+                            self._out.write('\n')
                 # Here is a good place to resolve the abort address because we
                 # have all the information we need
                 if self._saved_abort_line:
