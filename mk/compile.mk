@@ -53,9 +53,9 @@ comp-cflags$(sm)	+= $(comp-cflags-warns-$(WARNS))
 CHECK ?= sparse
 
 .PHONY: FORCE
-.PHONY: FORCE-GENSRC
+.PHONY: FORCE-GENSRC$(sm)
 FORCE:
-FORCE-GENSRC:
+FORCE-GENSRC$(sm):
 
 
 define process_srcs
@@ -121,10 +121,10 @@ check-cmd-$2 ?= true
 -include $$(comp-dep-$2)
 
 
-$2: $1 FORCE-GENSRC
+$2: $1 FORCE-GENSRC$(sm)
 # Check if any prerequisites are newer than the target and
 # check if command line has changed
-	$$(if $$(strip $$(filter-out FORCE-GENSRC, $$?) \
+	$$(if $$(strip $$(filter-out FORCE-GENSRC$(sm), $$?) \
 	    $$(filter-out $$(comp-cmd-$2), $$(old-cmd-$2)) \
 	    $$(filter-out $$(old-cmd-$2), $$(comp-cmd-$2))), \
 		@set -e ;\
@@ -149,6 +149,11 @@ $(foreach f, $(srcs), $(eval $(call \
 # Handle generated source files, that is, files that are compiled from out-dir
 $(foreach f, $(gen-srcs), $(eval $(call process_srcs,$(f),$$(basename $f).o)))
 
+# Handle specified source files, that is, files that have a specified path
+# but where the object file should go into a specified out directory
+$(foreach f, $(spec-srcs), $(eval $(call \
+	process_srcs,$(f),$(spec-out-dir)/$$(notdir $$(basename $f)).o)))
+
 $(objs): $(conf-file)
 
 define _gen-asm-defines-file
@@ -156,7 +161,7 @@ define _gen-asm-defines-file
 # h-filename in $2
 # s-filename in $3
 
-FORCE-GENSRC: $(2)
+FORCE-GENSRC$(sm): $(2)
 
 comp-dep-$3	:= $$(dir $3)$$(notdir $3).d
 comp-cmd-file-$3:= $$(dir $3)$$(notdir $3).cmd
