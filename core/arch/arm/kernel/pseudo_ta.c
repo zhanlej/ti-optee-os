@@ -55,6 +55,7 @@ static TEE_Result copy_in_param(struct tee_ta_session *s __maybe_unused,
 {
 	size_t n;
 	void *va;
+	struct param_mem *mem;
 
 	for (n = 0; n < TEE_NUM_PARAMS; n++) {
 		switch (TEE_PARAM_TYPE_GET(param->types, n)) {
@@ -67,26 +68,24 @@ static TEE_Result copy_in_param(struct tee_ta_session *s __maybe_unused,
 		case TEE_PARAM_TYPE_MEMREF_INPUT:
 		case TEE_PARAM_TYPE_MEMREF_OUTPUT:
 		case TEE_PARAM_TYPE_MEMREF_INOUT:
-			if (!validate_in_param(s, param->u[n].mem.mobj))
+			mem = &param->u[n].mem;
+			if (!validate_in_param(s, mem->mobj))
 				return TEE_ERROR_BAD_PARAMETERS;
-			va = mobj_get_va(param->u[n].mem.mobj,
-					 param->u[n].mem.offs);
-			if (!va) {
+			va = mobj_get_va(mem->mobj, mem->offs);
+			if (!va && mem->size) {
 				TEE_Result res;
 
-				res  = mobj_reg_shm_map(param->u[n].mem.mobj);
+				res = mobj_reg_shm_inc_map(mem->mobj);
 				if (res)
 					return res;
 				did_map[n] = true;
-
-				va = mobj_get_va(param->u[n].mem.mobj,
-						 param->u[n].mem.offs);
+				va = mobj_get_va(mem->mobj, mem->offs);
 				if (!va)
 					return TEE_ERROR_BAD_PARAMETERS;
 			}
 
 			tee_param[n].memref.buffer = va;
-			tee_param[n].memref.size = param->u[n].mem.size;
+			tee_param[n].memref.size = mem->size;
 			break;
 		default:
 			memset(tee_param + n, 0, sizeof(TEE_Param));
@@ -128,7 +127,7 @@ static void unmap_mapped_param(struct tee_ta_param *param,
 		if (did_map[n]) {
 			TEE_Result res __maybe_unused;
 
-			res = mobj_reg_shm_unmap(param->u[n].mem.mobj);
+			res = mobj_reg_shm_dec_map(param->u[n].mem.mobj);
 			assert(!res);
 		}
 	}
@@ -234,17 +233,20 @@ bool is_pseudo_ta_ctx(struct tee_ta_ctx *ctx)
 /* Insures declared pseudo TAs conforms with core expectations */
 static TEE_Result verify_pseudo_tas_conformance(void)
 {
-	const struct pseudo_ta_head *start = &__start_ta_head_section;
-	const struct pseudo_ta_head *end = &__stop_ta_head_section;
+	const struct pseudo_ta_head *start =
+		SCATTERED_ARRAY_BEGIN(pseudo_tas, struct pseudo_ta_head);
+	const struct pseudo_ta_head *end =
+		SCATTERED_ARRAY_END(pseudo_tas, struct pseudo_ta_head);
 	const struct pseudo_ta_head *pta;
 
 	for (pta = start; pta < end; pta++) {
 		const struct pseudo_ta_head *pta2;
 
 		/* PTAs must all have a specific UUID */
-		for (pta2 = pta + 1; pta2 < end; pta2++)
+		for (pta2 = pta + 1; pta2 < end; pta2++) {
 			if (!memcmp(&pta->uuid, &pta2->uuid, sizeof(TEE_UUID)))
 				goto err;
+		}
 
 		if (!pta->name ||
 		    (pta->flags & PTA_MANDATORY_FLAGS) != PTA_MANDATORY_FLAGS ||
@@ -273,9 +275,10 @@ TEE_Result tee_ta_init_pseudo_ta_session(const TEE_UUID *uuid,
 
 	DMSG("Lookup pseudo TA %pUl", (void *)uuid);
 
-	ta = &__start_ta_head_section;
+	ta = SCATTERED_ARRAY_BEGIN(pseudo_tas, struct pseudo_ta_head);
 	while (true) {
-		if (ta >= &__stop_ta_head_section)
+		if (ta >= SCATTERED_ARRAY_END(pseudo_tas,
+					      struct pseudo_ta_head))
 			return TEE_ERROR_ITEM_NOT_FOUND;
 		if (memcmp(&ta->uuid, uuid, sizeof(TEE_UUID)) == 0)
 			break;

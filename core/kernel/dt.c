@@ -17,11 +17,17 @@ const struct dt_driver *dt_find_compatible_driver(const void *fdt, int offs)
 	const struct dt_device_match *dm;
 	const struct dt_driver *drv;
 
-	for_each_dt_driver(drv)
-		for (dm = drv->match_table; dm; dm++)
+	for_each_dt_driver(drv) {
+		for (dm = drv->match_table; dm; dm++) {
+			if (!dm->compatible) {
+				break;
+			}
 			if (!fdt_node_check_compatible(fdt, offs,
-						       dm->compatible))
+						       dm->compatible)) {
 				return drv;
+			}
+		}
+	}
 
 	return NULL;
 }
@@ -60,7 +66,7 @@ int dt_map_dev(const void *fdt, int offs, vaddr_t *base, size_t *size)
 		return -1;
 
 	pbase = _fdt_reg_base_address(fdt, offs);
-	if (pbase == (paddr_t)-1)
+	if (pbase == DT_INFO_INVALID_REG)
 		return -1;
 	sz = _fdt_reg_size(fdt, offs);
 	if (sz < 0)
@@ -115,7 +121,7 @@ static paddr_t _fdt_read_paddr(const uint32_t *cell, int n)
 
 	return addr;
 bad:
-	return (paddr_t)-1;
+	return DT_INFO_INVALID_REG;
 
 }
 
@@ -128,15 +134,15 @@ paddr_t _fdt_reg_base_address(const void *fdt, int offs)
 
 	parent = fdt_parent_offset(fdt, offs);
 	if (parent < 0)
-		return (paddr_t)-1;
+		return DT_INFO_INVALID_REG;
 
 	reg = fdt_getprop(fdt, offs, "reg", &len);
 	if (!reg)
-		return (paddr_t)-1;
+		return DT_INFO_INVALID_REG;
 
 	ncells = fdt_address_cells(fdt, parent);
 	if (ncells < 0)
-		return (paddr_t)-1;
+		return DT_INFO_INVALID_REG;
 
 	return _fdt_read_paddr(reg, ncells);
 }
@@ -151,7 +157,7 @@ ssize_t _fdt_reg_size(const void *fdt, int offs)
 
 	parent = fdt_parent_offset(fdt, offs);
 	if (parent < 0)
-		return (paddr_t)-1;
+		return DT_INFO_INVALID_REG;
 
 	reg = (const uint32_t *)fdt_getprop(fdt, offs, "reg", &len);
 	if (!reg)
@@ -209,4 +215,32 @@ int _fdt_get_status(const void *fdt, int offs)
 	}
 
 	return st;
+}
+
+void _fdt_fill_device_info(void *fdt, struct dt_node_info *info, int offs)
+{
+	struct dt_node_info dinfo = {
+		.reg = DT_INFO_INVALID_REG,
+		.clock = DT_INFO_INVALID_CLOCK,
+		.reset = DT_INFO_INVALID_RESET,
+	};
+	const fdt32_t *cuint;
+
+	dinfo.reg = _fdt_reg_base_address(fdt, offs);
+
+	cuint = fdt_getprop(fdt, offs, "clocks", NULL);
+	if (cuint) {
+		cuint++;
+		dinfo.clock = (int)fdt32_to_cpu(*cuint);
+	}
+
+	cuint = fdt_getprop(fdt, offs, "resets", NULL);
+	if (cuint) {
+		cuint++;
+		dinfo.reset = (int)fdt32_to_cpu(*cuint);
+	}
+
+	dinfo.status = _fdt_get_status(fdt, offs);
+
+	*info = dinfo;
 }

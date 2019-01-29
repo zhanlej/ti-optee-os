@@ -25,17 +25,21 @@ cflags$(sm)	:= $(cflags$(ta-target))
 aflags$(sm)	:= $(aflags$(ta-target))
 
 libdirs  = $(ta-dev-kit-dir$(sm))/lib
-libnames = utils utee mpa
+libnames = utils utee
+ifneq ($(CFG_TA_MBEDTLS_MPI),y)
+libnames += mpa
+endif
 ifeq ($(CFG_TA_MBEDTLS),y)
 libnames += mbedtls
 endif
 libdeps = $(addsuffix .a, $(addprefix $(libdirs)/lib, $(libnames)))
 
-subdirs = $(dir $(ta-mk-file))
+subdirs = $(patsubst %/,%,$(dir $(ta-mk-file)))
 include mk/subdir.mk
 
 spec-out-dir := $(link-out-dir$(sm))
 spec-srcs += $(ta-dev-kit-dir$(sm))/src/user_ta_header.c
 
+additional-compile-deps := $(ta_dev_kit-files) # TA dev kit should be built before in-tree TAs
 include mk/compile.mk
 include  ta/arch/$(ARCH)/link.mk

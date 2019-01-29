@@ -5,9 +5,19 @@
 #ifndef IO_H
 #define IO_H
 
+#include <compiler.h>
 #include <stdint.h>
 #include <types_ext.h>
 #include <utee_defines.h>
+
+/*
+ * Make sure that compiler reads given variable only once. This is needed
+ * in cases when we have normal shared memory, and this memory can be changed
+ * at any moment. Compiler does not knows about this, so it can optimize memory
+ * access in any way, including repeated read from the same address. This macro
+ * enforces compiler to access memory only once.
+ */
+#define READ_ONCE(p) __compiler_atomic_load(&(p))
 
 static inline void write8(uint8_t val, vaddr_t addr)
 {
@@ -82,6 +92,32 @@ static inline uint16_t get_be16(const void *p)
 static inline void put_be16(void *p, uint16_t val)
 {
 	*(uint16_t *)p = TEE_U16_TO_BIG_ENDIAN(val);
+}
+
+/*
+ * Set and clear bits helpers.
+ *
+ * @addr is the address of the memory cell accessed
+ * @set_mask represents the bit mask of the bit(s) to set, aka set to 1
+ * @clear_mask represents the bit mask of the bit(s) to clear, aka reset to 0
+ *
+ * io_clrsetbits32() clears then sets the target bits in this order. If a bit
+ * position is defined by both @set_mask and @clear_mask, the bit will be set.
+ */
+static inline void io_setbits32(uintptr_t addr, uint32_t set_mask)
+{
+	write32(read32(addr) | set_mask, addr);
+}
+
+static inline void io_clrbits32(uintptr_t addr, uint32_t clear_mask)
+{
+	write32(read32(addr) & ~clear_mask, addr);
+}
+
+static inline void io_clrsetbits32(uintptr_t addr, uint32_t clear_mask,
+				   uint32_t set_mask)
+{
+	write32((read32(addr) & ~clear_mask) | set_mask, addr);
 }
 
 #endif /*IO_H*/
