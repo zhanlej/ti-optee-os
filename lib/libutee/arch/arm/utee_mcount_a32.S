@@ -5,7 +5,7 @@
 
 #include <asm.S>
 
-#ifdef CFG_TA_GPROF_SUPPORT
+#if defined(CFG_TA_GPROF_SUPPORT) || defined(CFG_TA_FTRACE_SUPPORT)
 
 /*
  * Convert return address to call site address by subtracting the size of the
@@ -23,32 +23,29 @@
  * stored on the top of the stack. The callee, i.e. the instrumented function
  * itself, is determined from the current value of lr. Then we call:
  *   void __mcount_internal(void *frompc, void *selfpc);
- *
- * __gnu_mcount_nc is defined and set to the value of this function by the
- * TA linker script, only if__gnu_mcount_nc is referenced
  */
-FUNC __utee_mcount, :
+FUNC __gnu_mcount_nc, :
 	stmdb		sp!, {r0-r3, lr}
 	ldr		r0, [sp, #20]		/* lr of instrumented func */
+#ifdef CFG_TA_GPROF_SUPPORT
 	mcount_adj_pc	r0, r0
 	mcount_adj_pc	r1, lr			/* instrumented func */
 	bl		__mcount_internal
+#endif
 	ldmia		sp!, {r0-r3, ip, lr}
 	bx		ip
-END_FUNC __utee_mcount
+END_FUNC __gnu_mcount_nc
 
-#else /* !CFG_TA_GPROF_SUPPORT */
-
+#ifdef CFG_TA_FTRACE_SUPPORT
 /*
- * The TA linker script always references __utee_mcount so provide a version
- * that just pops one register (lr) off the stack, since that's the ABI we must
- * follow.
+ * ftrace is not yet supported in 32bit mode. Currently this is just a
+ * placeholder to avoid linking error.
  */
-	.weak __utee_mcount
-FUNC __utee_mcount, :
+FUNC __ftrace_return, :
 	push		{lr}
 	pop		{ip, lr}
 	bx		ip
-END_FUNC __utee_mcount
+END_FUNC __ftrace_return
+#endif
 
-#endif /* CFG_TA_GPROF_SUPPORT */
+#endif /* CFG_TA_GPROF_SUPPORT || CFG_TA_FTRACE_SUPPORT */

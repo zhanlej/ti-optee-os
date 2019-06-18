@@ -10,6 +10,7 @@
 #include <ctype.h>
 #include <initcall.h>
 #include <keep.h>
+#include <kernel/ftrace.h>
 #include <kernel/panic.h>
 #include <kernel/tee_misc.h>
 #include <kernel/tee_ta_manager.h>
@@ -17,11 +18,14 @@
 #include <kernel/user_ta.h>
 #include <mm/core_memprot.h>
 #include <mm/core_mmu.h>
+#include <mm/file.h>
+#include <mm/fobj.h>
 #include <mm/mobj.h>
 #include <mm/pgt_cache.h>
 #include <mm/tee_mm.h>
 #include <mm/tee_mmu.h>
 #include <mm/tee_pager.h>
+#include <printk.h>
 #include <signed_hdr.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -42,19 +46,35 @@
 #include "elf_load.h"
 #include "elf_load_dyn.h"
 
+struct load_seg {
+	uint32_t flags;
+	vaddr_t va;
+	size_t size;
+	struct mobj *mobj;
+};
+
 /* ELF file used by a TA (main executable or dynamic library) */
 struct user_ta_elf {
 	TEE_UUID uuid;
 	struct elf_load_state *elf_state;
-	struct mobj *mobj_code;
 	vaddr_t load_addr;
 	vaddr_t exidx_start; /* 32-bit ELF only */
 	size_t exidx_size;
 	struct load_seg *segs;
 	size_t num_segs;
+	struct file *file;
 
 	TAILQ_ENTRY(user_ta_elf) link;
 };
+
+static void free_segs(struct load_seg *segs, size_t num_segs)
+{
+	size_t n = 0;
+
+	for (n = 0; n < num_segs; n++)
+		mobj_free(segs[n].mobj);
+	free(segs);
+}
 
 static void free_elfs(struct user_ta_elf_head *elfs)
 {
@@ -63,8 +83,8 @@ static void free_elfs(struct user_ta_elf_head *elfs)
 
 	TAILQ_FOREACH_SAFE(elf, elfs, link, next) {
 		TAILQ_REMOVE(elfs, elf, link);
-		mobj_free(elf->mobj_code);
-		free(elf->segs);
+		free_segs(elf->segs, elf->num_segs);
+		file_put(elf->file);
 		free(elf);
 	}
 }
@@ -105,20 +125,12 @@ static uint32_t elf_flags_to_mattr(uint32_t flags)
 	if (flags & PF_X)
 		mattr |= TEE_MATTR_UX;
 	if (flags & PF_W)
-		mattr |= TEE_MATTR_UW;
+		mattr |= TEE_MATTR_UW | TEE_MATTR_PW;
 	if (flags & PF_R)
-		mattr |= TEE_MATTR_UR;
+		mattr |= TEE_MATTR_UR | TEE_MATTR_PR;
 
 	return mattr;
 }
-
-struct load_seg {
-	vaddr_t offs;
-	uint32_t flags;
-	vaddr_t oend;
-	vaddr_t va;
-	size_t size;
-};
 
 static TEE_Result get_elf_segments(struct user_ta_elf *elf,
 				   struct load_seg **segs_ret,
@@ -147,6 +159,7 @@ static TEE_Result get_elf_segments(struct user_ta_elf *elf,
 			return res;
 
 		if (type == PT_LOAD) {
+			size_t oend = 0;
 			void *p = realloc(segs, (num_segs + 1) * sizeof(*segs));
 
 			if (!p) {
@@ -155,10 +168,11 @@ static TEE_Result get_elf_segments(struct user_ta_elf *elf,
 			}
 			segs = p;
 			segs[num_segs] = (struct load_seg) {
-				.offs = ROUNDDOWN(va, SMALL_PAGE_SIZE),
-				.oend = ROUNDUP(va + size, SMALL_PAGE_SIZE),
+				.va = ROUNDDOWN(va, SMALL_PAGE_SIZE),
 				.flags = flags,
 			};
+			oend = ROUNDUP(va + size, SMALL_PAGE_SIZE);
+			segs[num_segs].size = oend - segs[num_segs].va;
 			num_segs++;
 		} else if (type == PT_ARM_EXIDX) {
 			elf->exidx_start = va;
@@ -168,14 +182,22 @@ static TEE_Result get_elf_segments(struct user_ta_elf *elf,
 
 	idx = 1;
 	while (idx < num_segs) {
-		size_t this_size = segs[idx].oend - segs[idx].offs;
-		size_t prev_size = segs[idx - 1].oend - segs[idx - 1].offs;
+		if (core_is_buffer_intersect(segs[idx].va, segs[idx].size,
+					     segs[idx - 1].va,
+					     segs[idx - 1].size)) {
+			size_t size = 0;
 
-		if (core_is_buffer_intersect(segs[idx].offs, this_size,
-					     segs[idx - 1].offs, prev_size)) {
+			/*
+			 * All segments are supposed to be in order and if
+			 * there's overlap it's only due to ROUNDUP() and
+			 * ROUNDDOWN() above.
+			 */
+			assert(segs[idx - 1].va <= segs[idx].va);
+			size = segs[idx].va + segs[idx].size - segs[idx - 1].va;
+			assert(segs[idx - 1].size <= size);
+
 			/* Merge the segments and their attributes */
-			segs[idx - 1].oend = MAX(segs[idx - 1].oend,
-						 segs[idx].oend);
+			segs[idx - 1].size = size;
 			segs[idx - 1].flags |= segs[idx].flags;
 
 			/* Remove this index */
@@ -194,19 +216,45 @@ static TEE_Result get_elf_segments(struct user_ta_elf *elf,
 
 static struct mobj *alloc_ta_mem(size_t size)
 {
-#ifdef CFG_PAGED_USER_TA
-	return mobj_paged_alloc(size);
-#else
-	struct mobj *mobj = mobj_mm_alloc(mobj_sec_ddr, size, &tee_mm_sec_ddr);
+	size_t num_pgs = ROUNDUP(size, SMALL_PAGE_SIZE) / SMALL_PAGE_SIZE;
+	struct fobj *fobj = fobj_ta_mem_alloc(num_pgs);
+	struct mobj *mobj = mobj_with_fobj_alloc(fobj);
 
-	if (mobj) {
-		size_t granularity = BIT(tee_mm_sec_ddr.shift);
-
-		/* Round up to allocation granularity size */
-		memset(mobj_get_va(mobj, 0), 0, ROUNDUP(size, granularity));
-	}
+	fobj_put(fobj);
 	return mobj;
-#endif
+}
+
+static TEE_Result find_ta_mem(struct file *file, unsigned int page_offset,
+			      struct mobj **mobj)
+{
+	/*
+	 * Note that we're not calling fobj_get() or fobj_put() directly in
+	 * this function. Since file currently exists all its fobjs are
+	 * also guaranteed to exist here.
+	 *
+	 * If mobj_with_fobj_alloc() succeeds it will call fobj_get()
+	 * internally to guarantee that the fobj is available during the
+	 * life time of the mobj.
+	 */
+	struct file_slice *fs = file_find_slice(file, page_offset);
+
+	*mobj = NULL;
+	/* Not finding a fobj is OK, the caller will allocate a new instead */
+	if (!fs)
+		return TEE_SUCCESS;
+	/*
+	 * If a fobj is found it has to match with the start or something is
+	 * wrong, besides we wouldn't be able to map it properly either.
+	 */
+	assert(fs->page_offset == page_offset); /* in case we're debugging */
+	if (fs->page_offset != page_offset)
+		return TEE_ERROR_ITEM_NOT_FOUND;
+
+	*mobj = mobj_with_fobj_alloc(fs->fobj);
+	if (!*mobj)
+		return TEE_ERROR_OUT_OF_MEMORY;
+
+	return TEE_SUCCESS;
 }
 
 static void init_utee_param(struct utee_params *up,
@@ -313,6 +361,7 @@ static TEE_Result user_ta_enter(TEE_ErrorOrigin *err,
 	serr = TEE_ORIGIN_TRUSTED_APP;
 
 	if (utc->ctx.panicked) {
+		abort_print_current_ta();
 		DMSG("tee_user_ta_enter: TA panicked with code 0x%x",
 		     utc->ctx.panic_code);
 		serr = TEE_ORIGIN_TEE;
@@ -321,6 +370,12 @@ static TEE_Result user_ta_enter(TEE_ErrorOrigin *err,
 
 	/* Copy out value results */
 	update_from_utee_param(param, usr_params);
+
+	/*
+	 * Clear out the parameter mappings added with tee_mmu_map_param()
+	 * above.
+	 */
+	tee_mmu_clean_param(utc);
 
 	s = tee_ta_pop_current_session();
 	assert(s == session);
@@ -434,7 +489,66 @@ static void user_ta_dump_state(struct tee_ta_ctx *ctx)
 	}
 	show_elfs(utc);
 }
-KEEP_PAGER(user_ta_dump_state);
+
+#ifdef CFG_TA_FTRACE_SUPPORT
+static void user_ta_dump_state_buffer(struct tee_ta_ctx *ctx, char *buf,
+				      size_t *sz)
+{
+	struct user_ta_ctx *utc = to_user_ta_ctx(ctx);
+	struct user_ta_elf *elf = NULL;
+	struct vm_region *r = NULL;
+	char flags[7] = { };
+	char desc[13] = { };
+	size_t idx = 0;
+	size_t n = 0;
+	size_t ip_size = *sz;
+	size_t write_sz = 0;
+
+	if (!buf || !ip_size)
+		return;
+
+	TAILQ_FOREACH(r, &utc->vm_info->regions, link) {
+		paddr_t pa = 0;
+
+		if (r->mobj)
+			mobj_get_pa(r->mobj, r->offset, 0, &pa);
+
+		mattr_perm_to_str(flags, sizeof(flags), r->attr);
+		describe_region(utc, r->va, r->size, desc, sizeof(desc));
+		write_sz = snprintk(buf, ip_size,
+				    " region %2zu: va 0x%0*" PRIxVA " pa 0x%0*"
+				    PRIxPA " size 0x%06zx flags %s %s\n",
+				    n, PRIxVA_WIDTH, r->va, PRIxPA_WIDTH, pa,
+				    r->size, flags, desc);
+		if (ip_size > write_sz) {
+			buf += write_sz;
+			ip_size -= write_sz;
+		} else {
+			return;
+		}
+		n++;
+	}
+
+	TAILQ_FOREACH(elf, &utc->elfs, link) {
+		write_sz = snprintk(buf, ip_size, " [%zu] %pUl @ 0x%0*" PRIxVA
+				    "\n", idx++, (void *)&elf->uuid,
+				    PRIxVA_WIDTH, elf->load_addr);
+		if (ip_size > write_sz) {
+			buf += write_sz;
+			ip_size -= write_sz;
+		} else {
+			return;
+		}
+	}
+
+	*sz -= ip_size;
+}
+#else /* CFG_TA_FTRACE_SUPPORT */
+static void user_ta_dump_state_buffer(struct tee_ta_ctx *ctx __unused,
+				      char *buf __unused, size_t *sz __unused)
+{
+}
+#endif /* CFG_TA_FTRACE_SUPPORT */
 
 static void release_ta_memory_by_mobj(struct mobj *mobj)
 {
@@ -453,11 +567,13 @@ static void release_ta_memory_by_mobj(struct mobj *mobj)
 
 static void free_utc(struct user_ta_ctx *utc)
 {
-	struct user_ta_elf *elf;
+	struct user_ta_elf *elf = NULL;
+	size_t n = 0;
 
 	tee_pager_rem_uta_areas(utc);
 	TAILQ_FOREACH(elf, &utc->elfs, link)
-		release_ta_memory_by_mobj(elf->mobj_code);
+		for (n = 0; n < elf->num_segs; n++)
+			release_ta_memory_by_mobj(elf->segs[n].mobj);
 	release_ta_memory_by_mobj(utc->mobj_stack);
 	release_ta_memory_by_mobj(utc->mobj_exidx);
 
@@ -500,6 +616,7 @@ static const struct tee_ta_ops user_ta_ops __rodata_unpaged = {
 	.enter_invoke_cmd = user_ta_enter_invoke_cmd,
 	.enter_close_session = user_ta_enter_close_session,
 	.dump_state = user_ta_dump_state,
+	.dump_state_buffer = user_ta_dump_state_buffer,
 	.destroy = user_ta_ctx_destroy,
 	.get_instance_id = user_ta_get_instance_id,
 };
@@ -525,7 +642,7 @@ static void set_ta_ctx_ops(struct tee_ta_ctx *ctx)
 
 bool is_user_ta_ctx(struct tee_ta_ctx *ctx)
 {
-	return ctx->ops == _user_ta_ops;
+	return ctx && ctx->ops == _user_ta_ops;
 }
 
 static TEE_Result check_ta_store(void)
@@ -694,6 +811,65 @@ static TEE_Result add_deps(struct user_ta_ctx *utc __unused,
 
 #endif
 
+static TEE_Result register_ro_slices(struct user_ta_ctx *utc,
+				     struct file **file,
+				     const struct user_ta_store_ops *ta_store,
+				     struct user_ta_store_handle *handle,
+				     struct load_seg *segs, size_t num_segs)
+{
+	TEE_Result res = TEE_SUCCESS;
+	struct file *f = NULL;
+	struct file_slice *fs = NULL;
+	size_t num_slices = 0;
+	size_t n = 0;
+	uint8_t tag[FILE_TAG_SIZE] = { 0 };
+	unsigned int tag_len = sizeof(tag);
+
+	assert(!*file);
+
+	res = ta_store->get_tag(handle, tag, &tag_len);
+	if (res)
+		return res;
+
+	for (n = 0; n < num_segs; n++) {
+		if (!(segs[n].flags & PF_W)) {
+			res = vm_set_prot(utc, segs[n].va, segs[n].size,
+					  elf_flags_to_mattr(segs[n].flags));
+			if (res)
+				return res;
+			num_slices++;
+		}
+	}
+
+	fs = calloc(num_slices, sizeof(*fs));
+	if (!fs)
+		return TEE_ERROR_OUT_OF_MEMORY;
+
+	num_slices = 0;
+	for (n = 0; n < num_segs; n++) {
+		if (!(segs[n].flags & PF_W)) {
+			fs[num_slices].fobj = mobj_get_fobj(segs[n].mobj);
+			fs[num_slices].page_offset = (segs[n].va - segs[0].va) /
+						     SMALL_PAGE_SIZE;
+			/*
+			 * The fobjs is guaranteed to exist now, and
+			 * file_new() will call fobj_get() on all supplied
+			 * fobjs later.
+			 */
+			fobj_put(fs[num_slices].fobj);
+			num_slices++;
+		}
+	}
+
+	f = file_new(tag, tag_len, fs, num_slices);
+	free(fs);
+	if (!f)
+		return TEE_ERROR_OUT_OF_MEMORY;
+
+	*file = f;
+	return TEE_SUCCESS;
+}
+
 #ifdef CFG_TA_ASLR
 static size_t aslr_offset(size_t min, size_t max)
 {
@@ -744,6 +920,7 @@ static TEE_Result load_elf_from_store(const TEE_UUID *uuid,
 {
 	struct user_ta_store_handle *handle = NULL;
 	struct elf_load_state *elf_state = NULL;
+	struct file *file = NULL;
 	struct ta_head *ta_head;
 	struct user_ta_elf *exe;
 	struct user_ta_elf *elf;
@@ -754,6 +931,7 @@ static TEE_Result load_elf_from_store(const TEE_UUID *uuid,
 	size_t n;
 	size_t num_segs = 0;
 	struct load_seg *segs = NULL;
+	unsigned int next_page_offset = 0;
 
 	res = ta_store->open(uuid, &handle);
 	if (res)
@@ -776,16 +954,16 @@ static TEE_Result load_elf_from_store(const TEE_UUID *uuid,
 
 	res = elf_load_head(elf_state,
 			    elf == exe ? sizeof(struct ta_head) : 0,
-			    &p, &vasize, &utc->is_32bit);
+			    &p, &vasize, &utc->is_32bit,
+			    elf == exe ? &utc->entry_func : NULL);
 	if (res)
 		goto out;
 	ta_head = p;
-
-
-	elf->mobj_code = alloc_ta_mem(vasize);
-	if (!elf->mobj_code) {
-		res = TEE_ERROR_OUT_OF_MEMORY;
-		goto out;
+	if (ta_head->depr_entry != UINT64_MAX) {
+		DMSG("Using decprecated TA entry via ta_head");
+		utc->entry_func = ta_head->depr_entry;
+	} else {
+		file = elf_load_get_file(elf_state);
 	}
 
 	if (elf == exe) {
@@ -825,25 +1003,54 @@ static TEE_Result load_elf_from_store(const TEE_UUID *uuid,
 		goto out;
 
 	if (prev)
-		elf->load_addr = prev->load_addr + prev->mobj_code->size;
+		elf->load_addr = prev->segs[prev->num_segs - 1].va +
+				 prev->segs[prev->num_segs - 1].size;
 	else
 		elf->load_addr = utc->stack_addr + utc->mobj_stack->size;
 	elf->load_addr = ROUNDUP(elf->load_addr, CORE_MMU_USER_CODE_SIZE);
 
 	for (n = 0; n < num_segs; n++) {
-		uint32_t prot = elf_flags_to_mattr(segs[n].flags) |
-				TEE_MATTR_PRW;
+		uint32_t prot = elf_flags_to_mattr(segs[n].flags);
+		size_t end_va = 0;
 
-		segs[n].va = elf->load_addr - segs[0].offs + segs[n].offs;
-		segs[n].size = segs[n].oend - segs[n].offs;
+		/*
+		 * The first segment has va == 0 and if elf->load_addr
+		 * hasn't been initialized yet it will be 0 too. This
+		 * results in va still 0 and thus will be chosen by
+		 * vm_map().
+		 */
+		segs[n].va += elf->load_addr;
+		if (file) {
+			res = find_ta_mem(file, next_page_offset,
+					  &segs[n].mobj);
+			if (res)
+				goto out;
+			/*
+			 * Note that segs[n].mobj can still be NULL if
+			 * corresponding fobj isn't found.
+			 */
+		}
+		if (!segs[n].mobj) {
+			segs[n].mobj = alloc_ta_mem(segs[n].size);
+			if (!segs[n].mobj) {
+				res = TEE_ERROR_OUT_OF_MEMORY;
+				goto out;
+			}
+			prot |= TEE_MATTR_PRW;
+		}
 		res = vm_map(utc, &segs[n].va, segs[n].size, prot,
-			     elf->mobj_code, segs[n].offs);
+			     segs[n].mobj, 0);
 		if (res)
 			goto out;
 		if (!n) {
 			elf->load_addr = segs[0].va;
 			DMSG("ELF load address %#" PRIxVA, elf->load_addr);
 		}
+
+		if (ADD_OVERFLOW(segs[n].va, segs[n].size, &end_va) ||
+		    end_va < elf->load_addr)
+			panic();
+		next_page_offset = (end_va - elf->load_addr) / SMALL_PAGE_SIZE;
 	}
 
 	tee_mmu_set_ctx(&utc->ctx);
@@ -852,12 +1059,25 @@ static TEE_Result load_elf_from_store(const TEE_UUID *uuid,
 	if (res)
 		goto out;
 
+	/*
+	 * Legacy TAs can't share read-only memory due to the way
+	 * relocation is updated.
+	 */
+	if (!file && ta_head->depr_entry == UINT64_MAX) {
+		res = register_ro_slices(utc, &file, ta_store, handle,
+					 segs, num_segs);
+		if (res)
+			goto out;
+	}
+
 	/* Find any external dependency (dynamically linked libraries) */
 	res = add_deps(utc, elf_state, elf->load_addr);
 out:
 	if (res) {
-		free(segs);
+		file_put(file);
+		free_segs(segs, num_segs);
 	} else {
+		elf->file = file;
 		elf->segs = segs;
 		elf->num_segs = num_segs;
 	}
@@ -891,8 +1111,10 @@ static void free_elf_states(struct user_ta_ctx *utc)
 {
 	struct user_ta_elf *elf;
 
-	TAILQ_FOREACH(elf, &utc->elfs, link)
-			elf_load_final(elf->elf_state);
+	TAILQ_FOREACH(elf, &utc->elfs, link) {
+		elf_load_final(elf->elf_state);
+		elf->elf_state = NULL;
+	}
 }
 
 static TEE_Result set_seg_prot(struct user_ta_ctx *utc,
@@ -956,7 +1178,8 @@ static TEE_Result set_exidx(struct user_ta_ctx *utc)
 	utc->mobj_exidx = alloc_ta_mem(exidx_sz);
 	if (!utc->mobj_exidx)
 		return TEE_ERROR_OUT_OF_MEMORY;
-	exidx = ROUNDUP(last_elf->load_addr + last_elf->mobj_code->size,
+	exidx = ROUNDUP(last_elf->segs[last_elf->num_segs - 1].va +
+				last_elf->segs[last_elf->num_segs - 1].size,
 			CORE_MMU_USER_CODE_SIZE);
 	res = vm_map(utc, &exidx, exidx_sz, TEE_MATTR_UR | TEE_MATTR_PRW,
 		     utc->mobj_exidx, 0);
@@ -1091,11 +1314,13 @@ TEE_Result tee_ta_init_user_ta_session(const TEE_UUID *uuid,
 
 	utc->ctx.flags = ta_head->flags;
 	utc->ctx.uuid = ta_head->uuid;
-	utc->entry_func = ta_head->entry.ptr64;
+	utc->entry_func += utc->load_addr;
 	utc->ctx.ref_count = 1;
 	condvar_init(&utc->ctx.busy_cv);
 	TAILQ_INSERT_TAIL(&tee_ctxes, &utc->ctx, link);
 	s->ctx = &utc->ctx;
+
+	ta_fbuf_init(utc->load_addr, s, exe->elf_state);
 
 	free_elf_states(utc);
 	tee_mmu_set_ctx(NULL);
@@ -1104,6 +1329,7 @@ TEE_Result tee_ta_init_user_ta_session(const TEE_UUID *uuid,
 err:
 	free_elf_states(utc);
 	tee_mmu_set_ctx(NULL);
+	pgt_flush_ctx(&utc->ctx);
 	free_utc(utc);
 	return res;
 }
