@@ -98,6 +98,9 @@ static bool __mutex_trylock(struct mutex *m, const char *fname __unused,
 
 	cpu_spin_unlock_xrestore(&m->spin_lock, old_itr_status);
 
+	if (can_lock_write)
+		mutex_trylock_check(m);
+
 	return can_lock_write;
 }
 
@@ -258,6 +261,7 @@ void mutex_destroy(struct mutex *m)
 		panic();
 	if (!wq_is_empty(&m->wq))
 		panic("waitqueue not empty");
+	mutex_destroy_check(m);
 }
 
 void condvar_init(struct condvar *cv)

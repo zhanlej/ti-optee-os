@@ -204,6 +204,7 @@ $3: $1 $(conf-file) FORCE
 	    $$(filter-out $$(old-cmd-$3), $$(comp-cmd-$3))), \
 		@set -e ;\
 		mkdir -p $$(dir $2) $$(dir $3) ;\
+		$(cmd-echo-silent) '  CC      $$@'; 			\
 		$(cmd-echo) $$(subst \",\\\",$$(comp-cmd-$3)) ;\
 		$$(comp-cmd-$3) ;\
 		echo "old-cmd-$3 := $$(subst \",\\\",$$(comp-cmd-$3))" > \
@@ -218,7 +219,7 @@ $(2): $(3)
 	mkdir -p $$(dir $$@);					\
 	echo "#ifndef $$(guard-$2)" >$$@.tmp;			\
 	echo "#define $$(guard-$2)" >>$$@.tmp;			\
-	sed -ne 's|^==>\([^ ]*\) [\$$$$#]*\([-0-9]*\) \([^@/]*\).*|#define \1\t\2\t/* \3*/|p' \
+	sed -ne 's|^.*==>\([^ ]*\) [\$$$$#]*\([-0-9]*\) \([^@/]*\).*|#define \1\t\2\t/* \3*/|p' \
 	< $$< >>$$@.tmp;					\
 	echo "#endif" >>$$@.tmp;				\
 	$$(call mv-if-changed,$$@.tmp,$$@)

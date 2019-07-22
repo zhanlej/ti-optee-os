@@ -116,7 +116,7 @@ endif
 # with limited depth not including any tag, so there is really no guarantee
 # that TEE_IMPL_VERSION contains the major and minor revision numbers.
 CFG_OPTEE_REVISION_MAJOR ?= 3
-CFG_OPTEE_REVISION_MINOR ?= 5
+CFG_OPTEE_REVISION_MINOR ?= 6
 
 # Trusted OS implementation manufacturer name
 CFG_TEE_MANUFACTURER ?= LINARO
@@ -264,9 +264,6 @@ endif
 ifeq ($(CFG_EARLY_TA),y)
 $(call force,CFG_ZLIB,y)
 endif
-
-# Support for dynamically linked user TAs
-CFG_TA_DYNLINK ?= y
 
 # Enable paging, requires SRAM, can't be enabled by default
 CFG_WITH_PAGER ?= n

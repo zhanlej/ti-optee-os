@@ -56,8 +56,7 @@ struct tee_ta_ops {
 			struct tee_ta_param *param, TEE_ErrorOrigin *eo);
 	void (*enter_close_session)(struct tee_ta_session *s);
 	void (*dump_state)(struct tee_ta_ctx *ctx);
-	void (*dump_state_buffer)(struct tee_ta_ctx *ctx, char *buf,
-				  size_t *sz);
+	void (*dump_ftrace)(struct tee_ta_ctx *ctx);
 	void (*destroy)(struct tee_ta_ctx *ctx);
 	uint32_t (*get_instance_id)(struct tee_ta_ctx *ctx);
 };
@@ -85,7 +84,8 @@ struct tee_ta_ctx {
 	uint32_t panicked;	/* True if TA has panicked, written from asm */
 	uint32_t panic_code;	/* Code supplied for panic */
 	uint32_t ref_count;	/* Reference counter for multi session TA */
-	bool busy;		/* context is busy and cannot be entered */
+	bool busy;		/* Context is busy and cannot be entered */
+	bool initializing;	/* Context is initializing */
 	struct condvar busy_cv;	/* CV used when context is busy */
 };
 
@@ -106,9 +106,6 @@ struct tee_ta_session {
 	bool unlink;		/* True if session is to be unlinked */
 #if defined(CFG_TA_GPROF_SUPPORT)
 	struct sample_buf *sbuf; /* Profiling data (PC sampling) */
-#endif
-#if defined(CFG_TA_FTRACE_SUPPORT)
-	struct ftrace_buf *fbuf; /* ftrace buffer */
 #endif
 };
 
@@ -162,8 +159,6 @@ struct tee_ta_session *tee_ta_get_session(uint32_t id, bool exclusive,
 			struct tee_ta_session_head *open_sessions);
 
 void tee_ta_put_session(struct tee_ta_session *sess);
-
-void tee_ta_dump_current(void);
 
 #if defined(CFG_TA_GPROF_SUPPORT)
 void tee_ta_gprof_sample_pc(vaddr_t pc);

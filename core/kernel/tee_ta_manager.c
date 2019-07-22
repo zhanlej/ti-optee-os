@@ -10,7 +10,6 @@
 #include <string.h>
 #include <arm.h>
 #include <assert.h>
-#include <kernel/ftrace.h>
 #include <kernel/mutex.h>
 #include <kernel/panic.h>
 #include <kernel/pseudo_ta.h>
@@ -101,6 +100,15 @@ static bool tee_ta_try_set_busy(struct tee_ta_ctx *ctx)
 
 	mutex_lock(&tee_ta_mutex);
 
+	if (ctx->initializing) {
+		/*
+		 * Context is still initializing and flags cannot be relied
+		 * on for user TAs. Wait here until it's initialized.
+		 */
+		while (ctx->busy)
+			condvar_wait(&ctx->busy_cv, &tee_ta_mutex);
+	}
+
 	if (ctx->flags & TA_FLAG_SINGLE_INSTANCE)
 		lock_single_instance();
 
@@ -148,8 +156,10 @@ static void tee_ta_clear_busy(struct tee_ta_ctx *ctx)
 	ctx->busy = false;
 	condvar_signal(&ctx->busy_cv);
 
-	if (ctx->flags & TA_FLAG_SINGLE_INSTANCE)
+	if (!ctx->initializing && (ctx->flags & TA_FLAG_SINGLE_INSTANCE))
 		unlock_single_instance();
+
+	ctx->initializing = false;
 
 	mutex_unlock(&tee_ta_mutex);
 }
@@ -267,9 +277,9 @@ static void destroy_session(struct tee_ta_session *s,
 			    struct tee_ta_session_head *open_sessions)
 {
 #if defined(CFG_TA_FTRACE_SUPPORT)
-	if (s->ctx) {
+	if (s->ctx && s->ctx->ops->dump_ftrace) {
 		tee_ta_push_current_session(s);
-		ta_fbuf_dump(s);
+		s->ctx->ops->dump_ftrace(s->ctx);
 		tee_ta_pop_current_session();
 	}
 #endif
@@ -710,8 +720,6 @@ TEE_Result tee_ta_open_session(TEE_ErrorOrigin *err,
 	 */
 	if (panicked || was_busy)
 		*err = TEE_ORIGIN_TEE;
-	else
-		*err = TEE_ORIGIN_TRUSTED_APP;
 
 	if (res != TEE_SUCCESS)
 		EMSG("Failed. Return error 0x%x", res);
@@ -866,41 +874,6 @@ struct tee_ta_session *tee_ta_get_calling_session(void)
 	if (s)
 		s = TAILQ_NEXT(s, link_tsd);
 	return s;
-}
-
-/*
- * dump_state - Display TA state as an error log.
- */
-static void dump_state(struct tee_ta_ctx *ctx)
-{
-	struct tee_ta_session *s = NULL;
-	bool active __maybe_unused;
-
-	if (!ctx) {
-		EMSG("No TA status: null context reference");
-		return;
-	}
-
-	active = ((tee_ta_get_current_session(&s) == TEE_SUCCESS) &&
-		  s && s->ctx == ctx);
-
-	EMSG_RAW("Status of TA %pUl (%p) %s", (void *)&ctx->uuid, (void *)ctx,
-		active ? "(active)" : "");
-	ctx->ops->dump_state(ctx);
-}
-
-void tee_ta_dump_current(void)
-{
-	struct tee_ta_session *s = NULL;
-
-	if (tee_ta_get_current_session(&s) != TEE_SUCCESS) {
-		EMSG("no valid session found, cannot log TA status");
-		return;
-	}
-
-	dump_state(s->ctx);
-
-	ta_fbuf_dump(s);
 }
 
 #if defined(CFG_TA_GPROF_SUPPORT)

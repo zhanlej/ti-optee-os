@@ -119,11 +119,13 @@ version-o-cflags = $(filter-out -g3,$(core-platform-cflags) \
 			$(platform-cflags) $(cflagscore))
 DATE_STR = `date -u`
 BUILD_COUNT_STR = `cat $(link-out-dir)/.buildcount`
+CORE_CC_VERSION = `$(CCcore) -v 2>&1 | grep "version " | sed 's/ *$$//'`
 define gen-version-o
 	$(call update-buildcount,$(link-out-dir)/.buildcount)
 	@$(cmd-echo-silent) '  GEN     $(link-out-dir)/version.o'
 	$(q)echo -e "const char core_v_str[] =" \
 		"\"$(TEE_IMPL_VERSION) \"" \
+		"\"($(CORE_CC_VERSION)) \"" \
 		"\"#$(BUILD_COUNT_STR) \"" \
 		"\"$(DATE_STR) \"" \
 		"\"$(CFG_KERN_LINKER_ARCH)\";\n" \
@@ -169,12 +171,18 @@ $(link-out-dir)/tee-pager.bin: $(link-out-dir)/tee.elf \
 		$< $@
 
 cleanfiles += $(link-out-dir)/tee-pageable.bin
+ifeq ($(CFG_WITH_PAGER),y)
 $(link-out-dir)/tee-pageable.bin: $(link-out-dir)/tee.elf
 	@$(cmd-echo-silent) '  OBJCOPY $@'
 	$(q)$(OBJCOPYcore) -O binary \
 		--only-section="$(init_sections)" \
 		--only-section="$(pageable_sections)" \
 		$< $@
+else
+$(link-out-dir)/tee-pageable.bin:
+	@$(cmd-echo-silent) '  TOUCH   $@'
+	$(q)touch $@
+endif
 
 cleanfiles += $(link-out-dir)/tee-data_end.txt
 $(link-out-dir)/tee-data_end.txt: $(link-out-dir)/tee.elf
