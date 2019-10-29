@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 # SPDX-License-Identifier: BSD-2-Clause
 #
 # Copyright (c) 2017, Linaro Limited
@@ -6,11 +6,13 @@
 
 
 import argparse
+import errno
 import glob
 import os
 import re
 import subprocess
 import sys
+import termios
 
 CALL_STACK_RE = re.compile('Call stack:')
 # This gets the address from lines looking like this:
@@ -103,11 +105,12 @@ class Symbolizer(object):
     def my_Popen(self, cmd):
         try:
             return subprocess.Popen(cmd, stdin=subprocess.PIPE,
-                                    stdout=subprocess.PIPE)
+                                    stdout=subprocess.PIPE, text=True,
+                                    bufsize=1)
         except OSError as e:
-            if e.errno == os.errno.ENOENT:
-                print >> sys.stderr, "*** Error:", cmd[0] + \
-                    ": command not found"
+            if e.errno == errno.ENOENT:
+                print("*** Error:{}: command not found".format(cmd[0]),
+                      file=sys.stderr)
                 sys.exit(1)
 
     def get_elf(self, elf_or_uuid):
@@ -133,9 +136,9 @@ class Symbolizer(object):
                              stdout=subprocess.PIPE)
         output = p.stdout.readlines()
         p.terminate()
-        if 'ARM aarch64,' in output[0]:
+        if b'ARM aarch64,' in output[0]:
             self._arch = 'aarch64-linux-gnu-'
-        elif 'ARM,' in output[0]:
+        elif b'ARM,' in output[0]:
             self._arch = 'arm-linux-gnueabihf-'
 
     def arch_prefix(self, cmd):
@@ -174,7 +177,11 @@ class Symbolizer(object):
                     elf_idx = r[2]
                     if elf_idx is not None:
                         return self._elfs[int(elf_idx)][1]
-            return None
+            # In case address is not found in TA ELF file, fallback to tee.elf
+            # especially to symbolize mixed (user-space and kernel) addresses
+            # which is true when syscall ftrace is enabled along with TA
+            # ftrace.
+            return '0x0'
         else:
             # tee.elf
             return '0x0'
@@ -205,7 +212,7 @@ class Symbolizer(object):
         if not reladdr or not self._addr2line:
             return '???'
         try:
-            print >> self._addr2line.stdin, reladdr
+            print(reladdr, file=self._addr2line.stdin)
             ret = self._addr2line.stdout.readline().rstrip('\n')
         except IOError:
             ret = '!!!'
@@ -477,9 +484,21 @@ def main():
         args.dirs = []
     symbolizer = Symbolizer(sys.stdout, args.dirs, args.strip_path)
 
-    for line in sys.stdin:
-        symbolizer.write(line)
-    symbolizer.flush()
+    fd = sys.stdin.fileno()
+    isatty = os.isatty(fd)
+    if isatty:
+        old = termios.tcgetattr(fd)
+        new = termios.tcgetattr(fd)
+        new[3] = new[3] & ~termios.ECHO  # lflags
+    try:
+        if isatty:
+            termios.tcsetattr(fd, termios.TCSADRAIN, new)
+        for line in sys.stdin:
+            symbolizer.write(line)
+    finally:
+        symbolizer.flush()
+        if isatty:
+            termios.tcsetattr(fd, termios.TCSADRAIN, old)
 
 
 if __name__ == "__main__":

@@ -21,7 +21,11 @@ function _checkpatch() {
 		$CHECKPATCH --quiet --ignore FILE_PATH_CHANGES \
 				--ignore GERRIT_CHANGE_ID \
 				--ignore NOT_UNIFIED_DIFF \
+				--ignore CAMELCASE \
+				--ignore PREFER_KERNEL_TYPES \
+				--ignore CONCATENATED_STRING \
 				--no-tree \
+				--strict \
 				$typedefs_opt \
 				-
 }

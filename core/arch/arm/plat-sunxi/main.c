@@ -93,15 +93,7 @@ static struct gic_data gic_data;
 static void tzpc_init(void);
 #endif
 
-static void main_fiq(void)
-{
-	panic();
-}
-
 static const struct thread_handlers handlers = {
-	.std_smc = tee_entry_std,
-	.fast_smc = tee_entry_fast,
-	.nintr = main_fiq,
 #if defined(CFG_WITH_ARM_TRUSTED_FW)
 	.cpu_on = cpu_on_handler,
 	.cpu_off = pm_do_nothing,

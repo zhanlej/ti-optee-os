@@ -322,6 +322,11 @@ static void bytes_to_u16(uint8_t *bytes, uint16_t *u16)
 	*u16 = (uint16_t) ((*bytes << 8) + *(bytes + 1));
 }
 
+static void get_op_result_bits(uint8_t *bytes, uint8_t *res)
+{
+	*res = *(bytes + 1) & RPMB_RESULT_MASK;
+}
+
 static TEE_Result tee_rpmb_mac_calc(uint8_t *mac, uint32_t macsize,
 				    uint8_t *key, uint32_t keysize,
 				    struct rpmb_data_frame *datafrms,
@@ -731,7 +736,7 @@ static TEE_Result tee_rpmb_resp_unpack_verify(struct rpmb_data_frame *datafrm,
 	uint16_t msg_type;
 	uint32_t wr_cnt;
 	uint16_t blk_idx;
-	uint16_t op_result;
+	uint8_t op_result;
 	struct rpmb_data_frame lastfrm;
 
 	if (!datafrm || !rawdata || !nbr_frms)
@@ -749,9 +754,9 @@ static TEE_Result tee_rpmb_resp_unpack_verify(struct rpmb_data_frame *datafrm,
 	memcpy(&lastfrm, &datafrm[nbr_frms - 1], RPMB_DATA_FRAME_SIZE);
 
 	/* Handle operation result and translate to TEEC error code. */
-	bytes_to_u16(lastfrm.op_result, &op_result);
-	if (rawdata->op_result)
-		*rawdata->op_result = op_result;
+	get_op_result_bits(lastfrm.op_result, &op_result);
+	if (op_result == RPMB_RESULT_AUTH_KEY_NOT_PROGRAMMED)
+		return TEE_ERROR_ITEM_NOT_FOUND;
 	if (op_result != RPMB_RESULT_OK)
 		return TEE_ERROR_GENERIC;
 
@@ -962,9 +967,8 @@ static TEE_Result tee_rpmb_verify_key_sync_counter(uint16_t dev_id)
 	if (res == TEE_SUCCESS) {
 		rpmb_ctx->key_verified = true;
 		rpmb_ctx->wr_cnt_synced = true;
-	}
-
-	DMSG("Verify key returning 0x%x", res);
+	} else
+		EMSG("Verify key returning 0x%x", res);
 	return res;
 }
 
@@ -1021,7 +1025,9 @@ static TEE_Result tee_rpmb_write_and_verify_key(uint16_t dev_id)
 {
 	TEE_Result res;
 
-	DMSG("RPMB INIT: Writing Key");
+	DMSG("RPMB INIT: Writing Key value:");
+	DHEXDUMP(rpmb_ctx->key, RPMB_KEY_MAC_SIZE);
+
 	res = tee_rpmb_write_key(dev_id);
 	if (res == TEE_SUCCESS) {
 		DMSG("RPMB INIT: Verifying Key");
@@ -1032,6 +1038,7 @@ static TEE_Result tee_rpmb_write_and_verify_key(uint16_t dev_id)
 #else
 static TEE_Result tee_rpmb_write_and_verify_key(uint16_t dev_id __unused)
 {
+	DMSG("RPMB INIT: CFG_RPMB_WRITE_KEY is not set");
 	return TEE_ERROR_BAD_STATE;
 }
 #endif
@@ -1094,8 +1101,11 @@ static TEE_Result tee_rpmb_init(uint16_t dev_id)
 
 		res = tee_rpmb_key_gen(dev_id, rpmb_ctx->key,
 				       RPMB_KEY_MAC_SIZE);
-		if (res != TEE_SUCCESS)
+		if (res != TEE_SUCCESS) {
+			EMSG("RPMB INIT: Deriving key failed with error 0x%x",
+				res);
 			goto func_exit;
+		}
 
 		rpmb_ctx->key_derived = true;
 	}
@@ -1105,11 +1115,16 @@ static TEE_Result tee_rpmb_init(uint16_t dev_id)
 		DMSG("RPMB INIT: Verifying Key");
 
 		res = tee_rpmb_verify_key_sync_counter(dev_id);
-		if (res != TEE_SUCCESS && !rpmb_ctx->key_verified) {
+		if (res == TEE_ERROR_ITEM_NOT_FOUND &&
+			!rpmb_ctx->key_verified) {
 			/*
 			 * Need to write the key here and verify it.
 			 */
+			DMSG("RPMB INIT: Auth key not yet written");
 			res = tee_rpmb_write_and_verify_key(dev_id);
+		} else if (res != TEE_SUCCESS) {
+			EMSG("Verify key failed!");
+			EMSG("Make sure key here matches device key");
 		}
 	}
 
@@ -1612,7 +1627,7 @@ static TEE_Result rpmb_fs_setup(void)
 			res = TEE_SUCCESS;
 			goto store_fs_par;
 		} else {
-			/* Wrong software is in use. */
+			EMSG("Wrong software is in use.");
 			res = TEE_ERROR_ACCESS_DENIED;
 			goto out;
 		}

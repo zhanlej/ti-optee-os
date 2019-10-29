@@ -34,7 +34,7 @@ struct ta_head {
 	uint64_t depr_entry;
 };
 
-#if defined(CFG_TA_FTRACE_SUPPORT)
+#if defined(CFG_FTRACE_SUPPORT)
 #define FTRACE_RETFUNC_DEPTH		50
 union compat_ptr {
 	uint64_t ptr64;
@@ -55,10 +55,14 @@ struct ftrace_buf {
 	uint64_t ret_stack[FTRACE_RETFUNC_DEPTH]; /* Return stack */
 	uint32_t ret_idx;	/* Return stack index */
 	uint32_t lr_idx;	/* lr index used for stack unwinding */
+	uint64_t begin_time[FTRACE_RETFUNC_DEPTH]; /* Timestamp */
+	uint64_t suspend_time;	/* Suspend timestamp */
 	uint32_t curr_size;	/* Size of ftrace buffer */
 	uint32_t max_size;	/* Max allowed size of ftrace buffer */
 	uint32_t head_off;	/* Ftrace buffer header offset */
 	uint32_t buf_off;	/* Ftrace buffer offset */
+	bool syscall_trace_enabled; /* Some syscalls are never traced */
+	bool syscall_trace_suspended; /* By foreign interrupt or RPC */
 };
 
 /* Defined by the linker script */

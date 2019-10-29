@@ -1,4 +1,7 @@
 CFG_CRYPTO ?= y
+# Select small code size in the crypto library if applicable (for instance
+# LibTomCrypt has -DLTC_SMALL_CODE)
+# Note: the compiler flag -Os is not set here but by CFG_CC_OPTIMIZE_FOR_SIZE
 CFG_CRYPTO_SIZE_OPTIMIZATION ?= y
 
 ifeq (y,$(CFG_CRYPTO))
@@ -192,7 +195,7 @@ ltc-one-enabled = $(call cfg-one-enabled,$(foreach v,$(1),_CFG_CORE_LTC_$(v)))
 _CFG_CORE_LTC_ACIPHER := $(call ltc-one-enabled, RSA DSA DH ECC)
 _CFG_CORE_LTC_AUTHENC := $(and $(filter y,$(_CFG_CORE_LTC_AES) \
 					  $(_CFG_CORE_LTC_AES_DESC)), \
-			       $(call ltc-one-enabled, CCM GCM))
+			       $(filter y,$(call ltc-one-enabled, CCM GCM)))
 _CFG_CORE_LTC_CIPHER := $(call ltc-one-enabled, AES AES_DESC DES)
 _CFG_CORE_LTC_HASH := $(call ltc-one-enabled, MD5 SHA1 SHA224 SHA256 SHA384 \
 					      SHA512)

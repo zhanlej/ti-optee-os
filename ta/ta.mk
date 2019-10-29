@@ -35,7 +35,7 @@ ta-mk-file-export-vars-$(sm) += CFG_TA_MBEDTLS_MPI
 ta-mk-file-export-vars-$(sm) += CFG_SYSTEM_PTA
 ta-mk-file-export-vars-$(sm) += CFG_TA_DYNLINK
 ta-mk-file-export-vars-$(sm) += CFG_TEE_TA_LOG_LEVEL
-ta-mk-file-export-vars-$(sm) += CFG_TA_FTRACE_SUPPORT
+ta-mk-file-export-vars-$(sm) += CFG_FTRACE_SUPPORT
 ta-mk-file-export-vars-$(sm) += CFG_UNWIND
 ta-mk-file-export-vars-$(sm) += CFG_TA_MCOUNT
 
@@ -49,6 +49,33 @@ aflags$(sm)	:= $(platform-aflags) $($(sm)-platform-aflags)
 # compiled, these flags are not propagated to the TA
 cppflags$(sm)	+= -include $(conf-file)
 cppflags$(sm) += -DTRACE_LEVEL=$(CFG_TEE_TA_LOG_LEVEL)
+
+ifeq ($(ta-target),ta_arm32)
+arm32-user-sysreg-txt = lib/libutee/arch/arm/arm32_user_sysreg.txt
+arm32-user-sysregs-$(arm32-user-sysreg-txt)-h := arm32_user_sysreg.h
+arm32-user-sysregs += $(arm32-user-sysreg-txt)
+
+arm32-user-sysregs-out := $(out-dir)/include/generated
+
+define process-arm32-user-sysreg
+FORCE-GENSRC$(sm): $$(arm32-user-sysregs-out)/$$(arm32-user-sysregs-$(1)-h)
+cleanfiles := $$(cleanfiles) \
+		 $$(arm32-user-sysregs-out)/$$(arm32-user-sysregs-$(1)-h)
+
+$$(arm32-user-sysregs-out)/$$(arm32-user-sysregs-$(1)-h): \
+		$(1) scripts/arm32_sysreg.py
+	@$(cmd-echo-silent) '  GEN     $$@'
+	$(q)mkdir -p $$(dir $$@)
+	$(q)scripts/arm32_sysreg.py --guard __$$(arm32-user-sysregs-$(1)-h) \
+		< $$< > $$@
+
+endef #process-arm32-user-sysreg
+
+$(foreach sr, $(arm32-user-sysregs), \
+	 $(eval $(call process-arm32-user-sysreg,$(sr))))
+
+cppflags$(sm)	+= -I$(arm32-user-sysregs-out)
+endif
 
 base-prefix := $(sm)-
 
@@ -85,6 +112,12 @@ libuuid = 527f1a47-b92c-4a74-95bd-72f19f4a6f74
 libl = $(mplib-for-utee) utils
 include mk/lib.mk
 
+libname = dl
+libdir = lib/libdl
+libuuid = be807bbd-81e1-4dc4-bd99-3d363f240ece
+libl = utee utils
+include mk/lib.mk
+
 base-prefix :=
 
 incdirs-host := $(filter-out lib/libutils%, $(incdirs$(sm)))
@@ -97,6 +130,9 @@ incfiles-extra-host += $(conf-cmake-file)
 incfiles-extra-host += core/include/tee/tee_fs_key_manager.h
 incfiles-extra-host += core/include/tee/fs_htree.h
 incfiles-extra-host += core/include/signed_hdr.h
+ifeq ($(ta-target),ta_arm32)
+incfiles-extra-host += $(out-dir)/include/generated/arm32_user_sysreg.h
+endif
 
 #
 # Copy lib files and exported headers from each lib
@@ -112,14 +148,15 @@ $2/$$(notdir $1): $1
 cleanfiles += $2/$$(notdir $1)
 ta_dev_kit: $2/$$(notdir $1)
 ta_dev_kit-files += $2/$$(notdir $1)
+ta_dev_kit-files-$3 += $2/$$(notdir $1)
 endef
 
 # Copy the .a files
 $(foreach f, $(libfiles), \
-	$(eval $(call copy-file, $(f), $(out-dir)/export-$(sm)/lib)))
+	$(eval $(call copy-file, $(f), $(out-dir)/export-$(sm)/lib,lib)))
 
 # Copy .mk files
-ta-mkfiles = mk/compile.mk mk/subdir.mk mk/gcc.mk mk/cleandirs.mk \
+ta-mkfiles = mk/compile.mk mk/subdir.mk mk/gcc.mk mk/clang.mk mk/cleandirs.mk \
 	ta/arch/$(ARCH)/link.mk ta/arch/$(ARCH)/link_shlib.mk \
 	ta/mk/ta_dev_kit.mk
 
@@ -128,12 +165,12 @@ $(foreach f, $(ta-mkfiles), \
 
 # Copy the .h files for TAs
 define copy-incdir
-sf := $(subst $1/, , $(shell find $1 -name "*.h"))
+sf := $(subst $1/, , $(shell find $1 -name "*.[hS]"))
 $$(foreach h, $$(sf), $$(eval $$(call copy-file, $1/$$(h), \
-	$$(patsubst %/,%,$$(subst /./,/,$2/$$(dir $$(h)))))))
+	$$(patsubst %/,%,$$(subst /./,/,$2/$$(dir $$(h)))),$3)))
 endef
 $(foreach d, $(incdirs$(sm)), \
-	$(eval $(call copy-incdir, $(d), $(out-dir)/export-$(sm)/include)))
+	$(eval $(call copy-incdir,$(d),$(out-dir)/export-$(sm)/include,include)))
 
 # Copy the .h files needed by host
 $(foreach d, $(incdirs-host), \
@@ -143,6 +180,9 @@ $(foreach f, $(incfiles-extra-host), \
 
 # Copy the src files
 ta-srcfiles = ta/arch/$(ARCH)/user_ta_header.c ta/arch/$(ARCH)/ta.ld.S
+ifeq ($(ta-target),ta_arm32)
+ta-srcfiles += ta/arch/$(ARCH)/ta_entry_a32.S
+endif
 $(foreach f, $(ta-srcfiles), \
 	$(eval $(call copy-file, $(f), $(out-dir)/export-$(sm)/src)))
 
@@ -152,7 +192,7 @@ $(foreach f, $(ta-keys), \
 	$(eval $(call copy-file, $(f), $(out-dir)/export-$(sm)/keys)))
 
 # Copy the scripts
-ta-scripts = scripts/sign.py scripts/symbolize.py
+ta-scripts = scripts/sign.py scripts/symbolize.py scripts/llvm-objcopy-wrapper
 $(foreach f, $(ta-scripts), \
 	$(eval $(call copy-file, $(f), $(out-dir)/export-$(sm)/scripts)))
 

@@ -15,6 +15,7 @@
 #include <string_ext.h>
 #include <string.h>
 #include <tee_api_types.h>
+#include <tee_internal_api_extensions.h>
 #include <user_ta_header.h>
 #include <utee_syscalls.h>
 
@@ -27,23 +28,43 @@ static vaddr_t ta_stack_size;
 
 struct ta_elf_queue main_elf_queue = TAILQ_HEAD_INITIALIZER(main_elf_queue);
 
-static struct ta_elf *queue_elf(const TEE_UUID *uuid)
+static struct ta_elf *queue_elf_helper(const TEE_UUID *uuid)
 {
-	struct ta_elf *elf = NULL;
+	struct ta_elf *elf = calloc(1, sizeof(*elf));
 
-	TAILQ_FOREACH(elf, &main_elf_queue, link)
-		if (!memcmp(uuid, &elf->uuid, sizeof(*uuid)))
-			return NULL;
-
-	elf = calloc(1, sizeof(*elf));
 	if (!elf)
-		err(TEE_ERROR_OUT_OF_MEMORY, "calloc");
+		return NULL;
 
 	TAILQ_INIT(&elf->segs);
 
 	elf->uuid = *uuid;
 	TAILQ_INSERT_TAIL(&main_elf_queue, elf, link);
 	return elf;
+}
+
+static struct ta_elf *queue_elf(const TEE_UUID *uuid)
+{
+	struct ta_elf *elf = ta_elf_find_elf(uuid);
+
+	if (elf)
+		return NULL;
+
+	elf = queue_elf_helper(uuid);
+	if (!elf)
+		err(TEE_ERROR_OUT_OF_MEMORY, "queue_elf_helper");
+
+	return elf;
+}
+
+struct ta_elf *ta_elf_find_elf(const TEE_UUID *uuid)
+{
+	struct ta_elf *elf = NULL;
+
+	TAILQ_FOREACH(elf, &main_elf_queue, link)
+		if (!memcmp(uuid, &elf->uuid, sizeof(*uuid)))
+			return elf;
+
+	return NULL;
 }
 
 static TEE_Result e32_parse_ehdr(struct ta_elf *elf, Elf32_Ehdr *ehdr)
@@ -452,6 +473,7 @@ static void populate_segments_legacy(struct ta_elf *elf)
 	struct segment *seg = NULL;
 	vaddr_t va = 0;
 
+	assert(elf->is_legacy);
 	TAILQ_FOREACH(seg, &elf->segs, link) {
 		struct segment *last_seg = TAILQ_LAST(&elf->segs, segment_head);
 		size_t pad_end = roundup(last_seg->vaddr + last_seg->memsz -
@@ -516,6 +538,7 @@ static void populate_segments(struct ta_elf *elf)
 	vaddr_t va = 0;
 	size_t pad_begin = 0;
 
+	assert(!elf->is_legacy);
 	TAILQ_FOREACH(seg, &elf->segs, link) {
 		struct segment *last_seg = TAILQ_LAST(&elf->segs, segment_head);
 		size_t pad_end = roundup(last_seg->vaddr + last_seg->memsz -
@@ -672,83 +695,6 @@ static void map_segments(struct ta_elf *elf)
 		elf->max_addr = va + sz;
 		elf->phdr = (void *)(va + elf->e_phoff);
 	}
-	if (elf->is_legacy)
-		populate_segments_legacy(elf);
-	else
-		populate_segments(elf);
-}
-
-static int hex(char c)
-{
-	char lc = tolower(c);
-
-	if (isdigit(lc))
-		return lc - '0';
-	if (isxdigit(lc))
-		return lc - 'a' + 10;
-	return -1;
-}
-
-static uint32_t parse_hex(const char *s, size_t nchars, uint32_t *res)
-{
-	uint32_t v = 0;
-	size_t n;
-	int c;
-
-	for (n = 0; n < nchars; n++) {
-		c = hex(s[n]);
-		if (c == (char)-1) {
-			*res = TEE_ERROR_BAD_FORMAT;
-			goto out;
-		}
-		v = (v << 4) + c;
-	}
-	*res = TEE_SUCCESS;
-out:
-	return v;
-}
-
-/*
- * Convert a UUID string @s into a TEE_UUID @uuid
- * Expected format for @s is: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
- * 'x' being any hexadecimal digit (0-9a-fA-F)
- */
-static TEE_Result parse_uuid(const char *s, TEE_UUID *uuid)
-{
-	TEE_Result res = TEE_SUCCESS;
-	TEE_UUID u = { 0 };
-	const char *p = s;
-	size_t i;
-
-	if (strlen(p) != 36)
-		return TEE_ERROR_BAD_FORMAT;
-	if (p[8] != '-' || p[13] != '-' || p[18] != '-' || p[23] != '-')
-		return TEE_ERROR_BAD_FORMAT;
-
-	u.timeLow = parse_hex(p, 8, &res);
-	if (res)
-		goto out;
-	p += 9;
-	u.timeMid = parse_hex(p, 4, &res);
-	if (res)
-		goto out;
-	p += 5;
-	u.timeHiAndVersion = parse_hex(p, 4, &res);
-	if (res)
-		goto out;
-	p += 5;
-	for (i = 0; i < 8; i++) {
-		u.clockSeqAndNode[i] = parse_hex(p, 2, &res);
-		if (res)
-			goto out;
-		if (i == 1)
-			p += 3;
-		else
-			p += 2;
-	}
-	*uuid = u;
-out:
-	return res;
 }
 
 static void add_deps_from_segment(struct ta_elf *elf, unsigned int type,
@@ -785,7 +731,7 @@ static void add_deps_from_segment(struct ta_elf *elf, unsigned int type,
 		read_dyn(elf, addr, n, &tag, &val);
 		if (tag != DT_NEEDED)
 			continue;
-		parse_uuid(str_tab + val, &uuid);
+		tee_uuid_from_str(&uuid, str_tab + val);
 		queue_elf(&uuid);
 	}
 }
@@ -849,63 +795,133 @@ static void close_handle(struct ta_elf *elf)
 	elf->handle = -1;
 }
 
-void ta_elf_load_main(const TEE_UUID *uuid, uint32_t *is_32bit,
-		      uint64_t *entry, uint64_t *sp, uint32_t *ta_flags)
+static void clean_elf_load_main(struct ta_elf *elf)
+{
+	TEE_Result res = TEE_SUCCESS;
+
+	/*
+	 * Clean up from last attempt to load
+	 */
+	res = sys_unmap(elf->ehdr_addr, SMALL_PAGE_SIZE);
+	if (res)
+		err(res, "sys_unmap");
+
+	while (!TAILQ_EMPTY(&elf->segs)) {
+		struct segment *seg = TAILQ_FIRST(&elf->segs);
+		vaddr_t va = 0;
+		size_t num_bytes = 0;
+
+		va = rounddown(elf->load_addr + seg->vaddr);
+		if (seg->remapped_writeable)
+			num_bytes = roundup(seg->vaddr + seg->memsz) -
+				    rounddown(seg->vaddr);
+		else
+			num_bytes = seg->memsz;
+
+		res = sys_unmap(va, num_bytes);
+		if (res)
+			err(res, "sys_unmap");
+
+		TAILQ_REMOVE(&elf->segs, seg, link);
+		free(seg);
+	}
+
+	free(elf->shdr);
+	memset(&elf->is_32bit, 0,
+	       (vaddr_t)&elf->uuid - (vaddr_t)&elf->is_32bit);
+
+	TAILQ_INIT(&elf->segs);
+}
+
+static void load_main(struct ta_elf *elf)
+{
+	init_elf(elf);
+	map_segments(elf);
+	populate_segments(elf);
+	add_dependencies(elf);
+	copy_section_headers(elf);
+	save_symtab(elf);
+	close_handle(elf);
+
+	elf->head = (struct ta_head *)elf->load_addr;
+	if (elf->head->depr_entry != UINT64_MAX) {
+		/*
+		 * Legacy TAs sets their entry point in ta_head. For
+		 * non-legacy TAs the entry point of the ELF is set instead
+		 * and leaving the ta_head entry point set to UINT64_MAX to
+		 * indicate that it's not used.
+		 *
+		 * NB, everything before the commit a73b5878c89d ("Replace
+		 * ta_head.entry with elf entry") is considered legacy TAs
+		 * for ldelf.
+		 *
+		 * Legacy TAs cannot be mapped with shared memory segments
+		 * so restart the mapping if it turned out we're loading a
+		 * legacy TA.
+		 */
+
+		DMSG("Reloading TA %pUl as legacy TA", (void *)&elf->uuid);
+		clean_elf_load_main(elf);
+		elf->is_legacy = true;
+		init_elf(elf);
+		map_segments(elf);
+		populate_segments_legacy(elf);
+		add_dependencies(elf);
+		copy_section_headers(elf);
+		save_symtab(elf);
+		close_handle(elf);
+		elf->head = (struct ta_head *)elf->load_addr;
+		/*
+		 * Check that the TA is still a legacy TA, if it isn't give
+		 * up now since we're likely under attack.
+		 */
+		if (elf->head->depr_entry == UINT64_MAX)
+			err(TEE_ERROR_GENERIC,
+			    "TA %pUl was changed on disk to non-legacy",
+			    (void *)&elf->uuid);
+	}
+
+}
+
+void ta_elf_load_main(const TEE_UUID *uuid, uint32_t *is_32bit, uint64_t *sp,
+		      uint32_t *ta_flags)
 {
 	struct ta_elf *elf = queue_elf(uuid);
-	struct ta_head *head;
 	vaddr_t va = 0;
 	TEE_Result res = TEE_SUCCESS;
 
 	assert(elf);
 	elf->is_main = true;
 
-	init_elf(elf);
-
-	/*
-	 * Legacy TAs doesn't set entry point, instead it's set in ta_head.
-	 * If entry point isn't set explicitly, set to the start of the
-	 * first executable section by the linker. Since ta_head also
-	 * always comes first in legacy TA it means that the entry point
-	 * will be set to 0x20.
-	 *
-	 * NB, everything before the commit a73b5878c89d ("Replace
-	 * ta_head.entry with elf entry") is considered legacy TAs for
-	 * ldelf.
-	 */
-	if (elf->e_entry == sizeof(*head))
-		elf->is_legacy = true;
-
-	map_segments(elf);
-	add_dependencies(elf);
-	copy_section_headers(elf);
-	save_symtab(elf);
-	close_handle(elf);
-
-	head = (struct ta_head *)elf->load_addr;
+	load_main(elf);
 
 	*is_32bit = elf->is_32bit;
-	if (elf->is_legacy) {
-		assert(head->depr_entry != UINT64_MAX);
-		*entry = head->depr_entry + elf->load_addr;
-	} else {
-		assert(head->depr_entry == UINT64_MAX);
-		*entry = elf->e_entry + elf->load_addr;
-	}
-
-	res = sys_map_zi(head->stack_size, 0, &va, 0, 0);
+	res = sys_map_zi(elf->head->stack_size, 0, &va, 0, 0);
 	if (res)
 		err(res, "sys_map_zi stack");
 
-	if (head->flags & ~TA_FLAGS_MASK)
+	if (elf->head->flags & ~TA_FLAGS_MASK)
 		err(TEE_ERROR_BAD_FORMAT, "Invalid TA flags(s) %#"PRIx32,
-		    head->flags & ~TA_FLAGS_MASK);
+		    elf->head->flags & ~TA_FLAGS_MASK);
 
-	*ta_flags = head->flags;
-	*sp = va + head->stack_size;
+	*ta_flags = elf->head->flags;
+	*sp = va + elf->head->stack_size;
 	ta_stack = va;
-	ta_stack_size = head->stack_size;
+	ta_stack_size = elf->head->stack_size;
 }
+
+void ta_elf_finalize_load_main(uint64_t *entry)
+{
+	struct ta_elf *elf = TAILQ_FIRST(&main_elf_queue);
+
+	assert(elf->is_main);
+
+	if (elf->is_legacy)
+		*entry = elf->head->depr_entry;
+	else
+		*entry = elf->e_entry + elf->load_addr;
+}
+
 
 void ta_elf_load_dependency(struct ta_elf *elf, bool is_32bit)
 {
@@ -919,6 +935,7 @@ void ta_elf_load_dependency(struct ta_elf *elf, bool is_32bit)
 		    is_32bit ? "32" : "64");
 
 	map_segments(elf);
+	populate_segments(elf);
 	add_dependencies(elf);
 	copy_section_headers(elf);
 	save_symtab(elf);
@@ -1150,3 +1167,31 @@ void ta_elf_stack_trace_a64(uint64_t fp, uint64_t sp, uint64_t pc)
 	print_stack_arm64(&state, ta_stack, ta_stack_size);
 }
 #endif
+
+TEE_Result ta_elf_add_library(const TEE_UUID *uuid)
+{
+	struct ta_elf *ta = TAILQ_FIRST(&main_elf_queue);
+	struct ta_elf *lib = ta_elf_find_elf(uuid);
+	struct ta_elf *elf = NULL;
+
+	if (lib)
+		return TEE_SUCCESS; /* Already mapped */
+
+	lib = queue_elf_helper(uuid);
+	if (!lib)
+		return TEE_ERROR_OUT_OF_MEMORY;
+
+	for (elf = lib; elf; elf = TAILQ_NEXT(elf, link))
+		ta_elf_load_dependency(elf, ta->is_32bit);
+
+	for (elf = lib; elf; elf = TAILQ_NEXT(elf, link)) {
+		ta_elf_relocate(elf);
+		ta_elf_finalize_mappings(elf);
+	}
+
+	for (elf = lib; elf; elf = TAILQ_NEXT(elf, link))
+		DMSG("ELF (%pUl) at %#"PRIxVA,
+		     (void *)&elf->uuid, elf->load_addr);
+
+	return TEE_SUCCESS;
+}

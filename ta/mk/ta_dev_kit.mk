@@ -72,6 +72,8 @@ ifeq ($(CFG_TA_MBEDTLS),y)
 libnames += mbedtls
 libdeps += $(ta-dev-kit-dir$(sm))/lib/libmbedtls.a
 endif
+libnames += dl
+libdeps += $(ta-dev-kit-dir$(sm))/lib/libdl.a
 
 # Pass config variable (CFG_) from conf.mk on the command line
 cppflags$(sm) += $(strip \
@@ -97,9 +99,14 @@ ifneq ($(user-ta-uuid),)
 # Build target is TA
 vpath %.c $(ta-dev-kit-dir$(sm))/src
 srcs += user_ta_header.c
+ifeq ($(sm),ta_arm32)
+vpath %.S $(ta-dev-kit-dir$(sm))/src
+srcs += ta_entry_a32.S
+endif
 endif
 
-include  $(ta-dev-kit-dir$(sm))/mk/gcc.mk
+SCRIPTS_DIR := $(ta-dev-kit-dir)/scripts
+include  $(ta-dev-kit-dir$(sm))/mk/$(COMPILER_$(sm)).mk
 include  $(ta-dev-kit-dir$(sm))/mk/compile.mk
 
 ifneq ($(user-ta-uuid),)

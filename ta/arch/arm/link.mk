@@ -23,7 +23,7 @@ link-ldflags += -z max-page-size=4096 # OP-TEE always uses 4K alignment
 link-ldflags += --as-needed # Do not add dependency on unused shlib
 link-ldflags += $(link-ldflags$(sm))
 
-ifeq ($(CFG_TA_FTRACE_SUPPORT),y)
+ifeq ($(CFG_FTRACE_SUPPORT),y)
 $(link-out-dir$(sm))/dyn_list:
 	@$(cmd-echo-silent) '  GEN     $@'
 	$(q)mkdir -p $(dir $@)
@@ -38,7 +38,7 @@ link-ldadd += --start-group $(addprefix -l,$(libnames)) --end-group
 ldargs-$(user-ta-uuid).elf := $(link-ldflags) $(objs) $(link-ldadd)
 
 
-link-script-cppflags-$(sm) := -DASM=1 \
+link-script-cppflags-$(sm) := \
 	$(filter-out $(CPPFLAGS_REMOVE) $(cppflags-remove), \
 		$(nostdinc$(sm)) $(CPPFLAGS) \
 		$(addprefix -I,$(incdirs$(sm)) $(link-out-dir$(sm))) \
@@ -52,12 +52,13 @@ define gen-link-t
 $(link-script-pp$(sm)): $(link-script$(sm)) $(conf-file) $(link-script-pp-makefiles$(sm))
 	@$(cmd-echo-silent) '  CPP     $$@'
 	$(q)mkdir -p $$(dir $$@)
-	$(q)$(CPP$(sm)) -Wp,-P,-MT,$$@,-MD,$(link-script-dep$(sm)) \
-		$(link-script-cppflags-$(sm)) $$< > $$@
+	$(q)$(CPP$(sm)) -P -MT $$@ -MD -MF $(link-script-dep$(sm)) \
+		$(link-script-cppflags-$(sm)) $$< -o $$@
 
 $(link-out-dir$(sm))/$(user-ta-uuid).elf: $(objs) $(libdeps) \
 					  $(link-script-pp$(sm)) \
-					  $(ftracedep)
+					  $(ftracedep) \
+					  $(additional-link-deps)
 	@$(cmd-echo-silent) '  LD      $$@'
 	$(q)$(LD$(sm)) $(ldargs-$(user-ta-uuid).elf) -o $$@
 
@@ -75,8 +76,10 @@ $(link-out-dir$(sm))/$(user-ta-uuid).ta: \
 			$(link-out-dir$(sm))/$(user-ta-uuid).stripped.elf \
 			$(TA_SIGN_KEY)
 	@$(cmd-echo-silent) '  SIGN    $$@'
-	$(q)$(SIGN) --key $(TA_SIGN_KEY) --uuid $(user-ta-uuid) --version 0 \
+	$(q)$(SIGN) --key $(TA_SIGN_KEY) --uuid $(user-ta-uuid) \
 		--in $$< --out $$@
 endef
 
 $(eval $(call gen-link-t))
+
+additional-link-deps :=

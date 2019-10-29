@@ -46,13 +46,7 @@
 #include <tee/entry_fast.h>
 #include <tee/entry_std.h>
 
-static void main_fiq(void);
-static void platform_tee_entry_fast(struct thread_smc_args *args);
-
 static const struct thread_handlers handlers = {
-	.std_smc = tee_entry_std,
-	.fast_smc = platform_tee_entry_fast,
-	.nintr = main_fiq,
 	.cpu_on = pm_panic,
 	.cpu_off = pm_panic,
 	.cpu_suspend = pm_panic,
@@ -73,11 +67,6 @@ register_phys_mem_pgdir(MEM_AREA_IO_SEC, SLCR_BASE, CORE_MMU_PGDIR_SIZE);
 const struct thread_handlers *generic_boot_get_handlers(void)
 {
 	return &handlers;
-}
-
-static void main_fiq(void)
-{
-	panic();
 }
 
 void plat_cpu_reset_late(void)
@@ -239,7 +228,8 @@ static uint32_t read_slcr(uint32_t addr, uint32_t *val)
 	return OPTEE_SMC_RETURN_EBADADDR;
 }
 
-static void platform_tee_entry_fast(struct thread_smc_args *args)
+/* Overriding the default __weak tee_entry_fast() */
+void tee_entry_fast(struct thread_smc_args *args)
 {
 	switch (args->a0) {
 	case ZYNQ7K_SMC_SLCR_WRITE:
@@ -249,7 +239,7 @@ static void platform_tee_entry_fast(struct thread_smc_args *args)
 		args->a0 = read_slcr(args->a1, &args->a2);
 		break;
 	default:
-		tee_entry_fast(args);
+		__tee_entry_fast(args);
 		break;
 	}
 }

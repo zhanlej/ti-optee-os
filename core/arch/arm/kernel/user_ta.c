@@ -45,15 +45,6 @@
 #include <utee_defines.h>
 #include <util.h>
 
-struct load_seg {
-	uint32_t flags;
-	vaddr_t va;
-	size_t size;
-	struct mobj *mobj;
-	struct file *file;
-	SLIST_ENTRY(load_seg) link;
-};
-
 extern uint8_t ldelf_data[];
 extern const unsigned int ldelf_code_size;
 extern const unsigned int ldelf_data_size;
@@ -63,23 +54,6 @@ const bool is_arm32 = true;
 #else
 const bool is_arm32;
 #endif
-
-static void free_seg(struct load_seg *seg)
-{
-	mobj_free(seg->mobj);
-	file_put(seg->file);
-	free(seg);
-}
-
-static void free_segs(struct load_seg_head *segs)
-{
-	while (!SLIST_EMPTY(segs)) {
-		struct load_seg *s = SLIST_FIRST(segs);
-
-		SLIST_REMOVE_HEAD(segs, link);
-		free_seg(s);
-	}
-}
 
 static void init_utee_param(struct utee_params *up,
 			const struct tee_ta_param *p, void *va[TEE_NUM_PARAMS])
@@ -221,30 +195,6 @@ cleanup_return:
 	return res;
 }
 
-static void clear_ldelf_mappings(struct user_ta_ctx *utc)
-{
-	TEE_Result res = TEE_SUCCESS;
-	struct load_seg *seg = NULL;
-
-	/*
-	 * This can be done more efficient, but quite few segments are
-	 * expected so a naive implementation may actually be preferable.
-	 */
-	while (true) {
-		SLIST_FOREACH(seg, &utc->segs, link)
-			if (seg->flags & TEE_MATTR_LDELF)
-				break;
-		if (!seg)
-			break;
-
-		SLIST_REMOVE(&utc->segs, seg, load_seg, link);
-		res = vm_unmap(utc, seg->va, seg->size);
-		if (res)
-			panic();
-		free_seg(seg);
-	}
-}
-
 static TEE_Result init_with_ldelf(struct tee_ta_session *sess,
 				  struct user_ta_ctx *utc)
 {
@@ -300,9 +250,11 @@ static TEE_Result init_with_ldelf(struct tee_ta_session *sess,
 	utc->stack_ptr = arg->stack_ptr;
 	utc->ctx.flags = arg->flags;
 	utc->dump_entry_func = arg->dump_entry;
-#ifdef CFG_TA_FTRACE_SUPPORT
+#ifdef CFG_FTRACE_SUPPORT
 	utc->ftrace_entry_func = arg->ftrace_entry;
+	sess->fbuf = arg->fbuf;
 #endif
+	utc->dl_entry_func = arg->dl_entry;
 
 out:
 	s = tee_ta_pop_current_session();
@@ -415,9 +367,9 @@ static TEE_Result dump_state_ldelf_dbg(struct user_ta_ctx *utc)
 				arg->maps[n].flags |= DUMP_MAP_EXEC;
 			if (r->attr & TEE_MATTR_SECURE)
 				arg->maps[n].flags |= DUMP_MAP_SECURE;
-			if (r->attr & TEE_MATTR_EPHEMERAL)
+			if (r->flags & VM_FLAG_EPHEMERAL)
 				arg->maps[n].flags |= DUMP_MAP_EPHEM;
-			if (r->attr & TEE_MATTR_LDELF)
+			if (r->flags & VM_FLAG_LDELF)
 				arg->maps[n].flags |= DUMP_MAP_LDELF;
 			n++;
 		}
@@ -503,7 +455,7 @@ static void user_ta_dump_state(struct tee_ta_ctx *ctx)
 	dump_state_no_ldelf_dbg(utc);
 }
 
-#ifdef CFG_TA_FTRACE_SUPPORT
+#ifdef CFG_FTRACE_SUPPORT
 static TEE_Result dump_ftrace(struct user_ta_ctx *utc, void *buf, size_t *blen)
 {
 	uaddr_t usr_stack = utc->ldelf_stack_ptr;
@@ -550,7 +502,7 @@ static TEE_Result dump_ftrace(struct user_ta_ctx *utc, void *buf, size_t *blen)
 
 static void user_ta_dump_ftrace(struct tee_ta_ctx *ctx)
 {
-	uint32_t prot = TEE_MATTR_URW | TEE_MATTR_EPHEMERAL;
+	uint32_t prot = TEE_MATTR_URW;
 	struct user_ta_ctx *utc = to_user_ta_ctx(ctx);
 	struct thread_param params[3] = { };
 	TEE_Result res = TEE_SUCCESS;
@@ -565,7 +517,7 @@ static void user_ta_dump_ftrace(struct tee_ta_ctx *ctx)
 	if (res != TEE_ERROR_SHORT_BUFFER)
 		return;
 
-	pl_sz = ROUNDUP(SMALL_PAGE_SIZE, blen + sizeof(TEE_UUID));
+	pl_sz = ROUNDUP(blen + sizeof(TEE_UUID), SMALL_PAGE_SIZE);
 
 	mobj = thread_rpc_alloc_payload(pl_sz);
 	if (!mobj) {
@@ -577,7 +529,7 @@ static void user_ta_dump_ftrace(struct tee_ta_ctx *ctx)
 	if (!buf)
 		goto out_free_pl;
 
-	res = vm_map(utc, &va, mobj->size, prot, mobj, 0);
+	res = vm_map(utc, &va, mobj->size, prot, VM_FLAG_EPHEMERAL, mobj, 0);
 	if (res)
 		goto out_free_pl;
 
@@ -605,7 +557,7 @@ out_unmap_pl:
 out_free_pl:
 	thread_rpc_free_payload(mobj);
 }
-#endif /*CFG_TA_FTRACE_SUPPORT*/
+#endif /*CFG_FTRACE_SUPPORT*/
 
 static void free_utc(struct user_ta_ctx *utc)
 {
@@ -622,7 +574,6 @@ static void free_utc(struct user_ta_ctx *utc)
 	}
 
 	vm_info_final(utc);
-	free_segs(&utc->segs);
 
 	/* Free cryp states created by this TA */
 	tee_svc_cryp_free_states(utc);
@@ -648,7 +599,7 @@ static const struct tee_ta_ops user_ta_ops __rodata_unpaged = {
 	.enter_invoke_cmd = user_ta_enter_invoke_cmd,
 	.enter_close_session = user_ta_enter_close_session,
 	.dump_state = user_ta_dump_state,
-#ifdef CFG_TA_FTRACE_SUPPORT
+#ifdef CFG_FTRACE_SUPPORT
 	.dump_ftrace = user_ta_dump_ftrace,
 #endif
 	.destroy = user_ta_ctx_destroy,
@@ -690,45 +641,57 @@ static TEE_Result check_ta_store(void)
 }
 service_init(check_ta_store);
 
+static TEE_Result alloc_and_map_ldelf_fobj(struct user_ta_ctx *utc, size_t sz,
+					   uint32_t prot, vaddr_t *va)
+{
+	size_t num_pgs = ROUNDUP(sz, SMALL_PAGE_SIZE) / SMALL_PAGE_SIZE;
+	struct fobj *fobj = fobj_ta_mem_alloc(num_pgs);
+	struct mobj *mobj = mobj_with_fobj_alloc(fobj, NULL);
+	TEE_Result res = TEE_SUCCESS;
+
+	fobj_put(fobj);
+	if (!mobj)
+		return TEE_ERROR_OUT_OF_MEMORY;
+	res = vm_map(utc, va, num_pgs * SMALL_PAGE_SIZE,
+		     prot, VM_FLAG_LDELF | VM_FLAG_EXCLUSIVE_MOBJ, mobj, 0);
+	if (res)
+		mobj_free(mobj);
+
+	return res;
+}
+
+/*
+ * This function may leave a few mappings behind on error, but that's taken
+ * care of by tee_ta_init_user_ta_session() since the entire context is
+ * removed then.
+ */
 static TEE_Result load_ldelf(struct user_ta_ctx *utc)
 {
 	TEE_Result res = TEE_SUCCESS;
-	struct fobj *fobj = NULL;
 	vaddr_t stack_addr = 0;
 	vaddr_t code_addr = 0;
 	vaddr_t rw_addr = 0;
-	size_t num_pgs = 0;
 
 	utc->is_32bit = is_arm32;
 
-	num_pgs = ROUNDUP(LDELF_STACK_SIZE, SMALL_PAGE_SIZE) / SMALL_PAGE_SIZE;
-	fobj = fobj_ta_mem_alloc(num_pgs);
-	res = user_ta_map(utc, &stack_addr, fobj,
-			  TEE_MATTR_URW | TEE_MATTR_PRW | TEE_MATTR_LDELF,
-			  NULL, 0, 0);
-	fobj_put(fobj);
+	res = alloc_and_map_ldelf_fobj(utc, LDELF_STACK_SIZE,
+				       TEE_MATTR_URW | TEE_MATTR_PRW,
+				       &stack_addr);
 	if (res)
 		return res;
 	utc->ldelf_stack_ptr = stack_addr + LDELF_STACK_SIZE;
 
-	num_pgs = ROUNDUP(ldelf_code_size, SMALL_PAGE_SIZE) / SMALL_PAGE_SIZE;
-	fobj = fobj_ta_mem_alloc(num_pgs);
-	res = user_ta_map(utc, &code_addr, fobj,
-			  TEE_MATTR_PRW | TEE_MATTR_LDELF, NULL, 0, 0);
-	fobj_put(fobj);
+	res = alloc_and_map_ldelf_fobj(utc, ldelf_code_size, TEE_MATTR_PRW,
+				       &code_addr);
 	if (res)
-		goto err;
+		return res;
 	utc->entry_func = code_addr + ldelf_entry;
 
-	num_pgs = ROUNDUP(ldelf_data_size, SMALL_PAGE_SIZE) / SMALL_PAGE_SIZE;
 	rw_addr = ROUNDUP(code_addr + ldelf_code_size, SMALL_PAGE_SIZE);
-	fobj = fobj_ta_mem_alloc(num_pgs);
-	res = user_ta_map(utc, &rw_addr, fobj,
-			  TEE_MATTR_URW | TEE_MATTR_PRW | TEE_MATTR_LDELF,
-			  NULL, 0, 0);
-	fobj_put(fobj);
+	res = alloc_and_map_ldelf_fobj(utc, ldelf_data_size,
+				       TEE_MATTR_URW | TEE_MATTR_PRW, &rw_addr);
 	if (res)
-		goto err;
+		return res;
 
 	tee_mmu_set_ctx(&utc->ctx);
 
@@ -739,15 +702,11 @@ static TEE_Result load_ldelf(struct user_ta_ctx *utc)
 			  ROUNDUP(ldelf_code_size, SMALL_PAGE_SIZE),
 			  TEE_MATTR_URX);
 	if (res)
-		goto err;
+		return res;
 
 	DMSG("ldelf load address %#"PRIxVA, code_addr);
 
 	return TEE_SUCCESS;
-
-err:
-	clear_ldelf_mappings(utc);
-	return res;
 }
 
 TEE_Result tee_ta_init_user_ta_session(const TEE_UUID *uuid,
@@ -798,131 +757,5 @@ err:
 	tee_mmu_set_ctx(NULL);
 	pgt_flush_ctx(&utc->ctx);
 	free_utc(utc);
-	return res;
-}
-
-TEE_Result user_ta_map(struct user_ta_ctx *utc, vaddr_t *va, struct fobj *f,
-		       uint32_t prot, struct file *file, size_t pad_begin,
-		       size_t pad_end)
-{
-	TEE_Result res = TEE_ERROR_GENERIC;
-	struct load_seg *seg = calloc(1, sizeof(*seg));
-
-	if (!seg)
-		return TEE_ERROR_OUT_OF_MEMORY;
-
-	seg->flags = prot;
-	seg->mobj = mobj_with_fobj_alloc(f);
-	if (!seg->mobj) {
-		res = TEE_ERROR_OUT_OF_MEMORY;
-		goto err;
-	}
-	seg->size = f->num_pages * SMALL_PAGE_SIZE;
-
-	res = vm_map_pad(utc, va, seg->size, prot, seg->mobj, 0, pad_begin,
-			 pad_end);
-	if (res)
-		goto err;
-
-	seg->va = *va;
-	seg->file = file_get(file);
-	SLIST_INSERT_HEAD(&utc->segs, seg, link);
-
-	return TEE_SUCCESS;
-
-err:
-	mobj_free(seg->mobj);
-	free(seg);
-
-	return res;
-}
-
-static struct load_seg *find_exact_seg(struct load_seg_head *segs, vaddr_t va,
-				       size_t len)
-{
-	struct load_seg *seg = NULL;
-
-	SLIST_FOREACH(seg, segs, link)
-		if (seg->va == va && seg->size == len)
-			return seg;
-
-	return NULL;
-}
-
-TEE_Result user_ta_unmap(struct user_ta_ctx *utc, vaddr_t va, size_t len)
-{
-	TEE_Result res = TEE_ERROR_GENERIC;
-	struct load_seg *seg = find_exact_seg(&utc->segs, va, len);
-
-	if (!seg)
-		return TEE_ERROR_ITEM_NOT_FOUND;
-
-	res = vm_unmap(utc, va, len);
-	if (res)
-		return res;
-
-	SLIST_REMOVE(&utc->segs, seg, load_seg, link);
-	free_seg(seg);
-
-	return TEE_SUCCESS;
-}
-
-TEE_Result user_ta_set_prot(struct user_ta_ctx *utc, vaddr_t va, size_t len,
-			    uint32_t prot)
-{
-	TEE_Result res = TEE_ERROR_GENERIC;
-	struct load_seg *seg = find_exact_seg(&utc->segs, va, len);
-
-	if (!seg)
-		return TEE_ERROR_ITEM_NOT_FOUND;
-
-	/*
-	 * If the segment is a mapping of a part of a file (seg->file !=
-	 * NULL) it cannot be made writeable as all mapped files are mapped
-	 * read-only.
-	 */
-	if (seg->file && (prot & (TEE_MATTR_UW | TEE_MATTR_PW)))
-		return TEE_ERROR_ACCESS_DENIED;
-
-	res = vm_set_prot(utc, va, len, prot);
-	if (res)
-		return res;
-
-	seg->flags &= ~TEE_MATTR_PROT_MASK;
-	seg->flags |= prot & TEE_MATTR_PROT_MASK;
-
-	return TEE_SUCCESS;
-}
-
-TEE_Result user_ta_remap(struct user_ta_ctx *utc, vaddr_t *new_va,
-			 vaddr_t old_va, size_t len, size_t pad_begin,
-			 size_t pad_end)
-{
-	TEE_Result r2 = TEE_SUCCESS;
-	TEE_Result res = TEE_ERROR_GENERIC;
-	struct load_seg *seg = find_exact_seg(&utc->segs, old_va, len);
-	vaddr_t va = *new_va;
-
-	if (!seg)
-		return TEE_ERROR_ITEM_NOT_FOUND;
-
-	res = vm_unmap(utc, seg->va, seg->size);
-	if (res)
-		return res;
-
-	res = vm_map_pad(utc, &va, seg->size, seg->flags, seg->mobj, 0,
-			 pad_begin, pad_end);
-	if (res)
-		goto err;
-
-	seg->va = va;
-	*new_va = va;
-	return TEE_SUCCESS;
-err:
-	va = seg->va;
-	r2 = vm_map_pad(utc, &va, seg->size, seg->flags, seg->mobj, 0,
-			0, 0);
-	if (r2)
-		panic("Cannot restore mapping");
 	return res;
 }

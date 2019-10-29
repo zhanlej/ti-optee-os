@@ -33,7 +33,7 @@
 #ifndef KERNEL_UNWIND
 #define KERNEL_UNWIND
 
-#ifndef ASM
+#ifndef __ASSEMBLER__
 #include <compiler.h>
 #include <tee_api_types.h>
 #include <types_ext.h>
@@ -89,7 +89,6 @@ void print_kernel_stack(int level);
 #ifdef ARM64
 static inline void print_stack_arm64(int level __unused,
 				     struct unwind_state_arm64 *state __unused,
-				     bool kernel_stack __unused,
 				     vaddr_t stack __unused,
 				     size_t stack_size __unused)
 {
@@ -126,7 +125,7 @@ static inline void *unw_get_kernel_stack(void)
 }
 #endif /* CFG_UNWIND  */
 
-#endif /*ASM*/
+#endif /*__ASSEMBLER__*/
 
 #ifdef CFG_UNWIND
 #define UNWIND(...)	__VA_ARGS__

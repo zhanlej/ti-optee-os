@@ -107,6 +107,9 @@ struct tee_ta_session {
 #if defined(CFG_TA_GPROF_SUPPORT)
 	struct sample_buf *sbuf; /* Profiling data (PC sampling) */
 #endif
+#if defined(CFG_FTRACE_SUPPORT)
+	struct ftrace_buf *fbuf; /* ftrace buffer */
+#endif
 };
 
 /* Registered contexts */
@@ -161,13 +164,20 @@ struct tee_ta_session *tee_ta_get_session(uint32_t id, bool exclusive,
 void tee_ta_put_session(struct tee_ta_session *sess);
 
 #if defined(CFG_TA_GPROF_SUPPORT)
-void tee_ta_gprof_sample_pc(vaddr_t pc);
 void tee_ta_update_session_utime_suspend(void);
 void tee_ta_update_session_utime_resume(void);
+void tee_ta_gprof_sample_pc(vaddr_t pc);
 #else
-static inline void tee_ta_gprof_sample_pc(vaddr_t pc __unused) {}
 static inline void tee_ta_update_session_utime_suspend(void) {}
 static inline void tee_ta_update_session_utime_resume(void) {}
+static inline void tee_ta_gprof_sample_pc(vaddr_t pc __unused) {}
+#endif
+#if defined(CFG_FTRACE_SUPPORT)
+void tee_ta_ftrace_update_times_suspend(void);
+void tee_ta_ftrace_update_times_resume(void);
+#else
+static inline void tee_ta_ftrace_update_times_suspend(void) {}
+static inline void tee_ta_ftrace_update_times_resume(void) {}
 #endif
 
 #endif

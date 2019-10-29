@@ -31,7 +31,7 @@ void vm_info_final(struct user_ta_ctx *utc);
  */
 
 TEE_Result vm_map_pad(struct user_ta_ctx *utc, vaddr_t *va, size_t len,
-		  uint32_t prot, struct mobj *mobj, size_t offs,
+		  uint32_t prot, uint32_t flags, struct mobj *mobj, size_t offs,
 		  size_t pad_begin, size_t pad_end);
 
 /*
@@ -40,12 +40,17 @@ TEE_Result vm_map_pad(struct user_ta_ctx *utc, vaddr_t *va, size_t len,
  * initialized to 0 if the next available can be chosen.
  */
 static inline TEE_Result vm_map(struct user_ta_ctx *utc, vaddr_t *va,
-				size_t len, uint32_t prot, struct mobj *mobj,
-				size_t offs)
+				size_t len, uint32_t prot, uint32_t flags,
+				struct mobj *mobj, size_t offs)
 {
-	return vm_map_pad(utc, va, len, prot, mobj, offs, 0, 0);
+	return vm_map_pad(utc, va, len, prot, flags, mobj, offs, 0, 0);
 }
 
+TEE_Result vm_remap(struct user_ta_ctx *utc, vaddr_t *new_va, vaddr_t old_va,
+		    size_t len, size_t pad_begin, size_t pad_end);
+
+TEE_Result vm_get_flags(struct user_ta_ctx *utc, vaddr_t va, size_t len,
+			uint32_t *flags);
 
 TEE_Result vm_set_prot(struct user_ta_ctx *utc, vaddr_t va, size_t len,
 		       uint32_t prot);

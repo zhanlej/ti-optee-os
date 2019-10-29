@@ -5,12 +5,13 @@ srcs-$(CFG_TZC380) += tzc380.c
 srcs-$(CFG_GIC) += gic.c
 srcs-$(CFG_PL061) += pl061_gpio.c
 srcs-$(CFG_PL022) += pl022_spi.c
+srcs-$(CFG_SP805_WDT) += sp805_wdt.c
 srcs-$(CFG_8250_UART) += serial8250_uart.c
 srcs-$(CFG_16550_UART) += ns16550.c
 srcs-$(CFG_IMX_SNVS) += imx_snvs.c
 srcs-$(CFG_IMX_UART) += imx_uart.c
+srcs-$(CFG_IMX_LPUART) += imx_lpuart.c
 srcs-$(CFG_IMX_WDOG) += imx_wdog.c
-cflags-imx_wdog.c-y += -Wno-suggest-attribute=noreturn
 srcs-$(CFG_SPRD_UART) += sprd_uart.c
 srcs-$(CFG_HI16XX_UART) += hi16xx_uart.c
 srcs-$(CFG_HI16XX_RNG) += hi16xx_rng.c
@@ -29,3 +30,5 @@ srcs-$(CFG_STPMIC1) += stpmic1.c
 srcs-$(CFG_BCM_HWRNG) += bcm_hwrng.c
 srcs-$(CFG_BCM_SOTP) += bcm_sotp.c
 srcs-$(CFG_BCM_GPIO) += bcm_gpio.c
+
+subdirs-y += crypto

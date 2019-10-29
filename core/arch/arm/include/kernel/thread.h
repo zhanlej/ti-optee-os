@@ -7,7 +7,7 @@
 #ifndef KERNEL_THREAD_H
 #define KERNEL_THREAD_H
 
-#ifndef ASM
+#ifndef __ASSEMBLER__
 #include <arm.h>
 #include <types_ext.h>
 #include <compiler.h>
@@ -21,7 +21,7 @@
 
 #define THREAD_RPC_MAX_NUM_PARAMS	4
 
-#ifndef ASM
+#ifndef __ASSEMBLER__
 
 #ifdef ARM64
 /*
@@ -209,46 +209,12 @@ struct thread_specific_data {
 	struct thread_abort_regs abort_regs;
 };
 
-#endif /*ASM*/
+#endif /*__ASSEMBLER__*/
 
-#ifndef ASM
-typedef void (*thread_smc_handler_t)(struct thread_smc_args *args);
-typedef void (*thread_nintr_handler_t)(void);
+#ifndef __ASSEMBLER__
 typedef unsigned long (*thread_pm_handler_t)(unsigned long a0,
 					     unsigned long a1);
 struct thread_handlers {
-	/*
-	 * stdcall and fastcall are called as regular functions and
-	 * normal ARM Calling Convention applies. Return values are passed
-	 * args->param{1-3} and forwarded into r0-r3 when returned to
-	 * non-secure world.
-	 *
-	 * stdcall handles calls which can be preemted from non-secure
-	 * world. This handler is executed with a large stack.
-	 *
-	 * fastcall handles fast calls which can't be preemted. This
-	 * handler is executed with a limited stack. This handler must not
-	 * cause any aborts or reenenable native interrupts which are
-	 * temporarily masked while executing this handler.
-	 *
-	 * TODO investigate if we should execute fastcalls and native interrupts
-	 * on different stacks allowing native interrupts to be enabled during
-	 * a fastcall.
-	 */
-	thread_smc_handler_t std_smc;
-	thread_smc_handler_t fast_smc;
-
-	/*
-	 * fiq is called as a regular function and normal ARM Calling
-	 * Convention applies.
-	 *
-	 * This handler handles native interrupts which can't be preemted. This
-	 * handler is executed with a limited stack. This handler must not cause
-	 * any aborts or reenenable native interrupts which are temporarily
-	 * masked while executing this handler.
-	 */
-	thread_nintr_handler_t nintr;
-
 	/*
 	 * Power management handlers triggered from ARM Trusted Firmware.
 	 * Not used when using internal monitor.
@@ -674,6 +640,6 @@ struct mobj *thread_rpc_alloc_global_payload(size_t size);
  */
 void thread_rpc_free_global_payload(struct mobj *mobj);
 
-#endif /*ASM*/
+#endif /*__ASSEMBLER__*/
 
 #endif /*KERNEL_THREAD_H*/

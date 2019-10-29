@@ -41,15 +41,7 @@
 register_phys_mem_pgdir(MEM_AREA_IO_NSEC,
 			CONSOLE_UART_BASE, SERIAL8250_UART_REG_SIZE);
 
-static void main_fiq(void)
-{
-	panic();
-}
-
 static const struct thread_handlers handlers = {
-	.std_smc = tee_entry_std,
-	.fast_smc = tee_entry_fast,
-	.nintr = main_fiq,
 	.cpu_on = cpu_on_handler,
 	.cpu_off = pm_do_nothing,
 	.cpu_suspend = pm_do_nothing,

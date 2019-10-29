@@ -7,7 +7,7 @@
 #ifndef SM_SM_H
 #define SM_SM_H
 
-#ifndef ASM
+#ifndef __ASSEMBLER__
 
 #include <compiler.h>
 #include <types_ext.h>
@@ -36,6 +36,10 @@ struct sm_unbanked_regs {
 	uint32_t und_lr;
 #ifdef CFG_SM_NO_CYCLE_COUNTING
 	uint32_t pmcr;
+#endif
+#ifdef CFG_FTRACE_SUPPORT
+	uint32_t cntkctl;
+	uint32_t pad;
 #endif
 };
 
@@ -125,7 +129,7 @@ enum sm_handler_ret sm_platform_handler(struct sm_ctx *ctx);
 void sm_save_unbanked_regs(struct sm_unbanked_regs *regs);
 void sm_restore_unbanked_regs(struct sm_unbanked_regs *regs);
 
-#endif /*!ASM*/
+#endif /*!__ASSEMBLER__*/
 
 /* 32 bit return value for sm_from_nsec() */
 #define SM_EXIT_TO_NON_SECURE		0

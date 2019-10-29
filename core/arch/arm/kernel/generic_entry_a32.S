@@ -67,13 +67,13 @@ END_FUNC __assert_flat_mapped_range
 	.endm
 #endif /* CFG_PL310 */
 
-.weak plat_cpu_reset_early
 FUNC plat_cpu_reset_early , :
 UNWIND(	.fnstart)
 	bx	lr
 UNWIND(	.fnend)
 END_FUNC plat_cpu_reset_early
 KEEP_PAGER plat_cpu_reset_early
+.weak plat_cpu_reset_early
 
 	.section .text.reset_vect_table
 	.align 5
@@ -369,8 +369,8 @@ UNWIND(	.cantunwind)
 	add	r1, r1, r2
 	ldr	r2, =__init_start
 copy_init:
-	ldmdb	r1!, {r3, r8-r12, sp}
-	stmdb	r0!, {r3, r8-r12, sp}
+	ldmdb	r1!, {r3, r8-r12}
+	stmdb	r0!, {r3, r8-r12}
 	cmp	r0, r2
 	bgt	copy_init
 #endif

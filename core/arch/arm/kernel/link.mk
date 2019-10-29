@@ -22,7 +22,7 @@ link-objs := $(filter-out $(out-dir)/core/arch/arm/kernel/link_dummies.o, \
 ldargs-tee.elf := $(link-ldflags) $(link-objs) $(link-out-dir)/version.o \
 		  $(link-ldadd) $(libgcccore)
 
-link-script-cppflags := -DASM=1 \
+link-script-cppflags := \
 	$(filter-out $(CPPFLAGS_REMOVE) $(cppflags-remove), \
 		$(nostdinccore) $(CPPFLAGS) \
 		$(addprefix -I,$(incdirscore) $(link-out-dir)) \
@@ -101,8 +101,8 @@ cleanfiles += $(link-script-pp) $(link-script-dep)
 $(link-script-pp): $(link-script) $(link-script-extra-deps)
 	@$(cmd-echo-silent) '  CPP     $@'
 	@mkdir -p $(dir $@)
-	$(q)$(CPPcore) -Wp,-P,-MT,$@,-MD,$(link-script-dep) \
-		$(link-script-cppflags) $< > $@
+	$(q)$(CPPcore) -P -MT $@ -MD -MF $(link-script-dep) \
+		$(link-script-cppflags) $< -o $@
 
 define update-buildcount
 	@$(cmd-echo-silent) '  UPD     $(1)'
@@ -117,7 +117,12 @@ endef
 # filter-out to workaround objdump warning
 version-o-cflags = $(filter-out -g3,$(core-platform-cflags) \
 			$(platform-cflags) $(cflagscore))
+# SOURCE_DATE_EPOCH defined for reproducible builds
+ifneq ($(SOURCE_DATE_EPOCH),)
+DATE_STR = `date -u -d @$(SOURCE_DATE_EPOCH)`
+else
 DATE_STR = `date -u`
+endif
 BUILD_COUNT_STR = `cat $(link-out-dir)/.buildcount`
 CORE_CC_VERSION = `$(CCcore) -v 2>&1 | grep "version " | sed 's/ *$$//'`
 define gen-version-o

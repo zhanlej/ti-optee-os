@@ -45,9 +45,10 @@ SLIST_HEAD(load_seg_head, load_seg);
 struct user_ta_ctx {
 	uaddr_t entry_func;
 	uaddr_t dump_entry_func;
-#ifdef CFG_TA_FTRACE_SUPPORT
+#ifdef CFG_FTRACE_SUPPORT
 	uaddr_t ftrace_entry_func;
 #endif
+	uaddr_t dl_entry_func;
 	uaddr_t ldelf_stack_ptr;
 	bool is_32bit;
 	bool is_initializing;
@@ -60,11 +61,6 @@ struct user_ta_ctx {
 	struct vm_info *vm_info;
 	void *ta_time_offs;
 	struct tee_pager_area_head *areas;
-	/*
-	 * Note that the load segments are stored in reverse order, that
-	 * is, the last segment first.
-	 */
-	struct load_seg_head segs;
 #if defined(CFG_WITH_VFP)
 	struct thread_user_vfp_state vfp;
 #endif
@@ -98,63 +94,6 @@ static inline TEE_Result tee_ta_init_user_ta_session(
 			struct tee_ta_session *s __unused)
 {
 	return TEE_ERROR_ITEM_NOT_FOUND;
-}
-#endif
-
-struct fobj;
-#ifdef CFG_WITH_USER_TA
-TEE_Result user_ta_map(struct user_ta_ctx *utc, vaddr_t *va, struct fobj *f,
-		       uint32_t prot, struct file *file, size_t pad_begin,
-		       size_t pad_end);
-#else
-static inline TEE_Result user_ta_map(struct user_ta_ctx *utc __unused,
-				     vaddr_t *va __unused,
-				     struct fobj *f __unused,
-				     uint32_t prot __unused,
-				     struct file *file __unused,
-				     size_t pad_begin __unused,
-				     size_t pad_end __unused)
-{
-	return TEE_ERROR_GENERIC;
-}
-#endif
-
-#ifdef CFG_WITH_USER_TA
-TEE_Result user_ta_unmap(struct user_ta_ctx *utc, vaddr_t va, size_t len);
-#else
-static inline TEE_Result user_ta_unmap(struct user_ta_ctx *utc __unused,
-				       vaddr_t va __unused, size_t len __unused)
-{
-	return TEE_ERROR_GENERIC;
-}
-#endif
-
-#ifdef CFG_WITH_USER_TA
-TEE_Result user_ta_set_prot(struct user_ta_ctx *utc, vaddr_t va, size_t len,
-			    uint32_t prot);
-#else
-static inline TEE_Result user_ta_set_prot(struct user_ta_ctx *utc __unused,
-					  vaddr_t va __unused,
-					  size_t len __unused,
-					  uint32_t prot __unused)
-{
-	return TEE_ERROR_GENERIC;
-}
-#endif
-
-#ifdef CFG_WITH_USER_TA
-TEE_Result user_ta_remap(struct user_ta_ctx *utc, vaddr_t *new_va,
-			 vaddr_t old_va, size_t len, size_t pad_begin,
-			 size_t pad_end);
-#else
-static inline TEE_Result user_ta_remap(struct user_ta_ctx *utc __unused,
-				       vaddr_t *new_va __unused,
-				       vaddr_t old_va __unused,
-				       size_t len __unused,
-				       size_t pad_begin __unused,
-				       size_t pad_end __unused);
-{
-	return TEE_ERROR_GENERIC;
 }
 #endif
 

@@ -194,7 +194,7 @@
 #define TLBI_ASID_SHIFT		48
 #define TLBI_ASID_MASK		0xff
 
-#ifndef ASM
+#ifndef __ASSEMBLER__
 static inline void isb(void)
 {
 	asm volatile ("isb");
@@ -213,6 +213,16 @@ static inline void dsb_ish(void)
 static inline void dsb_ishst(void)
 {
 	asm volatile ("dsb ishst");
+}
+
+static inline void sev(void)
+{
+	asm volatile ("sev");
+}
+
+static inline void wfe(void)
+{
+	asm volatile ("wfe");
 }
 
 static inline void write_at_s1e1r(uint64_t va)
@@ -258,19 +268,21 @@ static inline void tlbi_vale1is(uint64_t mva)
  * Templates for register read/write functions based on mrs/msr
  */
 
-#define DEFINE_REG_READ_FUNC_(reg, type, asmreg)	\
-static inline type read_##reg(void)			\
-{							\
-	type val;					\
-							\
-	asm volatile("mrs %0, " #asmreg : "=r" (val));	\
-	return val;					\
+#define DEFINE_REG_READ_FUNC_(reg, type, asmreg)		\
+static inline type read_##reg(void)				\
+{								\
+	uint64_t val64 = 0;					\
+								\
+	asm volatile("mrs %0, " #asmreg : "=r" (val64));	\
+	return val64;						\
 }
 
 #define DEFINE_REG_WRITE_FUNC_(reg, type, asmreg)		\
 static inline void write_##reg(type val)			\
 {								\
-	asm volatile("msr " #asmreg ", %0" : : "r" (val));	\
+	uint64_t val64 = val;					\
+								\
+	asm volatile("msr " #asmreg ", %0" : : "r" (val64));	\
 }
 
 #define DEFINE_U32_REG_READ_FUNC(reg) \
@@ -302,6 +314,7 @@ DEFINE_U32_REG_READWRITE_FUNCS(daif)
 DEFINE_U32_REG_READWRITE_FUNCS(fpcr)
 DEFINE_U32_REG_READWRITE_FUNCS(fpsr)
 
+DEFINE_U32_REG_READ_FUNC(ctr_el0)
 DEFINE_U32_REG_READ_FUNC(contextidr_el1)
 DEFINE_U32_REG_READ_FUNC(sctlr_el1)
 
@@ -341,7 +354,7 @@ DEFINE_REG_WRITE_FUNC_(icc_eoir0, uint32_t, S3_0_c12_c8_1)
 DEFINE_REG_WRITE_FUNC_(icc_eoir1, uint32_t, S3_0_c12_c12_1)
 DEFINE_REG_WRITE_FUNC_(icc_igrpen0, uint32_t, S3_0_C12_C12_6)
 DEFINE_REG_WRITE_FUNC_(icc_igrpen1, uint32_t, S3_0_C12_C12_7)
-#endif /*ASM*/
+#endif /*__ASSEMBLER__*/
 
 #endif /*ARM64_H*/
 

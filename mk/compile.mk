@@ -48,7 +48,8 @@ comp-cflags-warns-3:= $(comp-cflags-warns-2) $(comp-cflags-warns-low)
 
 WARNS		?= 3
 
-comp-cflags$(sm)	+= $(comp-cflags-warns-$(WARNS))
+comp-cflags$(sm) += $(comp-cflags-warns-$(WARNS)) \
+			$(comp-cflags-warns-$(COMPILER_$(sm)))
 
 CHECK ?= sparse
 
@@ -83,11 +84,11 @@ endif
 
 else ifeq ($$(filter %.S,$1),$1)
 comp-q-$2 := AS
-comp-flags-$2 = -DASM=1 $$(filter-out $$(AFLAGS_REMOVE) $$(aflags-remove) \
-				      $$(aflags-remove-$$(comp-sm-$2)) \
-				      $$(aflags-remove-$2), \
-			   $$(AFLAGS) $$(comp-aflags$$(comp-sm-$2)) \
-			   $$(aflags$$(comp-sm-$2)) $$(aflags-$2))
+comp-flags-$2 = $$(filter-out $$(AFLAGS_REMOVE) $$(aflags-remove) \
+			      $$(aflags-remove-$$(comp-sm-$2)) \
+			      $$(aflags-remove-$2), \
+		   $$(AFLAGS) $$(comp-aflags$$(comp-sm-$2)) \
+		   $$(aflags$$(comp-sm-$2)) $$(aflags-$2))
 
 else
 $$(error "Don't know what to do with $1")
