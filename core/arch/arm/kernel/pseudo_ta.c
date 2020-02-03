@@ -79,12 +79,16 @@ static TEE_Result copy_in_param(struct tee_ta_session *s __maybe_unused,
 			if (!va && mem->size) {
 				TEE_Result res;
 
-				res = mobj_reg_shm_inc_map(mem->mobj);
+				res = mobj_inc_map(mem->mobj);
 				if (res)
 					return res;
 				did_map[n] = true;
 				va = mobj_get_va(mem->mobj, mem->offs);
 				if (!va)
+					return TEE_ERROR_BAD_PARAMETERS;
+				if (mem->size &&
+				    !mobj_get_va(mem->mobj,
+						 mem->offs + mem->size - 1))
 					return TEE_ERROR_BAD_PARAMETERS;
 			}
 
@@ -131,7 +135,7 @@ static void unmap_mapped_param(struct tee_ta_param *param,
 		if (did_map[n]) {
 			TEE_Result res __maybe_unused;
 
-			res = mobj_reg_shm_dec_map(param->u[n].mem.mobj);
+			res = mobj_dec_map(param->u[n].mem.mobj);
 			assert(!res);
 		}
 	}

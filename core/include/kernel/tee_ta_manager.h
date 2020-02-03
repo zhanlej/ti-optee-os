@@ -7,14 +7,15 @@
 #ifndef TEE_TA_MANAGER_H
 #define TEE_TA_MANAGER_H
 
-#include <types_ext.h>
+#include <kernel/mutex.h>
+#include <kernel/tee_common.h>
+#include <mm/tee_mmu_types.h>
 #include <sys/queue.h>
 #include <tee_api_types.h>
-#include <utee_types.h>
-#include <kernel/tee_common.h>
-#include <kernel/mutex.h>
 #include <tee_api_types.h>
+#include <types_ext.h>
 #include <user_ta_header.h>
+#include <utee_types.h>
 
 /* Magic TEE identity pointer: set when teecore requests a TA close */
 #define KERN_IDENTITY	((TEE_Identity *)-1)
@@ -48,6 +49,7 @@ struct tee_ta_param {
 struct tee_ta_ctx;
 struct user_ta_ctx;
 struct pseudo_ta_ctx;
+struct thread_svc_regs;
 
 struct tee_ta_ops {
 	TEE_Result (*enter_open_session)(struct tee_ta_session *s,
@@ -59,6 +61,7 @@ struct tee_ta_ops {
 	void (*dump_ftrace)(struct tee_ta_ctx *ctx);
 	void (*destroy)(struct tee_ta_ctx *ctx);
 	uint32_t (*get_instance_id)(struct tee_ta_ctx *ctx);
+	bool (*handle_svc)(struct thread_svc_regs *regs);
 };
 
 #if defined(CFG_TA_GPROF_SUPPORT)

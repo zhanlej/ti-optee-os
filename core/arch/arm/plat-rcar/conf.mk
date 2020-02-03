@@ -8,6 +8,15 @@ $(call force,CFG_SECURE_TIME_SOURCE_CNTPCT,y)
 $(call force,CFG_WITH_ARM_TRUSTED_FW,y)
 $(call force,CFG_SCIF,y)
 $(call force,CFG_CORE_LARGE_PHYS_ADDR,y)
+$(call force,CFG_CORE_ARM64_PA_BITS,36)
+
+# Disable core ASLR for two reasons:
+# 1. There is no source for ALSR seed, as Rcar platform
+#    does not provide DTB to OP-TEE. Also, there is no
+#    publically available documentation on integrated
+#    hardware RNG, so we can't use it either.
+# 2. OP-TEE crashes during boot with enabled CFG_CORE_ASLR.
+$(call force,CFG_CORE_ASLR,n)
 
 ifeq ($(PLATFORM_FLAVOR),salvator_h3)
 $(call force,CFG_TEE_CORE_NB_CORE,8)

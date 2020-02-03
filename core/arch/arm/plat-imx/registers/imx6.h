@@ -30,7 +30,7 @@
 #ifndef __IMX6_H__
 #define __IMX6_H__
 
-#include <registers/imx6-crm_regs.h>
+#include <registers/imx6-crm.h>
 
 #define UART1_BASE			0x2020000
 #define IOMUXC_BASE			0x020E0000
@@ -78,6 +78,8 @@
 
 #if defined(CFG_MX6UL) || defined(CFG_MX6ULL)
 #define GICC_OFFSET			0x2000
+#define UART6_BASE			0x021FC000
+#define UART7_BASE			0x02018000
 /* No CAAM on i.MX6ULL */
 #define CAAM_BASE			0x02140000
 #else
@@ -93,6 +95,7 @@
 #define CSU_CSL_END			0xA0
 #define	CSU_ACCESS_ALL			0x00FF00FF
 #define CSU_SETTING_LOCK		0x01000100
+#define CSU_SA				0x218
 
 /* Used in suspend/resume and low power idle */
 #define MX6Q_SRC_GPR1			0x20

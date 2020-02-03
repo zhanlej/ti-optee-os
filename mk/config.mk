@@ -116,7 +116,7 @@ endif
 # with limited depth not including any tag, so there is really no guarantee
 # that TEE_IMPL_VERSION contains the major and minor revision numbers.
 CFG_OPTEE_REVISION_MAJOR ?= 3
-CFG_OPTEE_REVISION_MINOR ?= 7
+CFG_OPTEE_REVISION_MINOR ?= 8
 
 # Trusted OS implementation manufacturer name
 CFG_TEE_MANUFACTURER ?= LINARO
@@ -213,7 +213,7 @@ CFG_WITH_USER_TA ?= y
 # When this flag is enabled, the ELF loader will introduce a random offset
 # when mapping the application in user space. ASLR makes the exploitation of
 # memory corruption vulnerabilities more difficult.
-CFG_TA_ASLR ?= n
+CFG_TA_ASLR ?= y
 
 # How much ASLR may shift the base address (in pages). The base address is
 # randomly shifted by an integer number of pages comprised between these two
@@ -221,6 +221,13 @@ CFG_TA_ASLR ?= n
 # to guess at the expense of using more memory for the page tables.
 CFG_TA_ASLR_MIN_OFFSET_PAGES ?= 0
 CFG_TA_ASLR_MAX_OFFSET_PAGES ?= 128
+
+# Address Space Layout Randomization for TEE Core
+#
+# When this flag is enabled, the early init code will introduce a random
+# offset when mapping TEE Core. ASLR makes the exploitation of memory
+# corruption vulnerabilities more difficult.
+CFG_CORE_ASLR ?= y
 
 # Load user TAs from the REE filesystem via tee-supplicant
 CFG_REE_FS_TA ?= y
@@ -348,6 +355,11 @@ CFG_CORE_NEX_HEAP_SIZE ?= 16384
 # instrumented with GCC's -pg flag and will output profiling information
 # in gmon.out format to /tmp/gmon-<ta_uuid>.out (path is defined in
 # tee-supplicant)
+# Note: this does not work well with shared libraries at the moment for a
+# couple of reasons:
+# 1. The profiling code assumes a unique executable section in the TA VA space.
+# 2. The code used to detect at run time if the TA is intrumented assumes that
+# the TA is linked statically.
 CFG_TA_GPROF_SUPPORT ?= n
 
 # TA function tracing.
@@ -393,15 +405,6 @@ endif
 CFG_ULIBS_SHARED ?= n
 
 ifeq (yy,$(CFG_TA_GPROF_SUPPORT)$(CFG_ULIBS_SHARED))
-# FIXME:
-# TA profiling with gprof does not work well with shared libraries (not limited
-# to CFG_ULIBS_SHARED=y actually), because the total .text size is not known at
-# link time. The symptom is an error trace when the TA starts (and no gprof
-# output is produced):
-#  E/TA: __utee_gprof_init:159 gprof: could not allocate profiling buffer
-# The allocation of the profiling buffer should probably be done at runtime
-# via a new syscall/PTA call instead of having it pre-allocated in .bss by the
-# linker.
 $(error CFG_TA_GPROF_SUPPORT and CFG_ULIBS_SHARED are currently incompatible)
 endif
 

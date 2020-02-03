@@ -11,6 +11,7 @@
 #include <io.h>
 #include <keep.h>
 #include <kernel/asan.h>
+#include <kernel/linker.h>
 #include <kernel/lockdep.h>
 #include <kernel/misc.h>
 #include <kernel/panic.h>
@@ -103,9 +104,11 @@ DECLARE_STACK(stack_abt, CFG_TEE_CORE_NB_CORE, STACK_ABT_SIZE, static);
 DECLARE_STACK(stack_thread, CFG_NUM_THREADS, STACK_THREAD_SIZE, static);
 #endif
 
-const void *stack_tmp_export = (uint8_t *)stack_tmp + sizeof(stack_tmp[0]) -
-			       (STACK_TMP_OFFS + STACK_CANARY_SIZE / 2);
-const uint32_t stack_tmp_stride = sizeof(stack_tmp[0]);
+const void *stack_tmp_export __section(".identity_map.stack_tmp_export") =
+	(uint8_t *)stack_tmp + sizeof(stack_tmp[0]) -
+	(STACK_TMP_OFFS + STACK_CANARY_SIZE / 2);
+const uint32_t stack_tmp_stride __section(".identity_map.stack_tmp_stride") =
+	sizeof(stack_tmp[0]);
 
 /*
  * These stack setup info are required by secondary boot cores before they
@@ -1235,12 +1238,49 @@ static bool get_spsr(bool is_32bit, unsigned long entry_func, uint32_t *spsr)
 }
 #endif
 
+static void set_ctx_regs(struct thread_ctx_regs *regs, unsigned long a0,
+			 unsigned long a1, unsigned long a2, unsigned long a3,
+			 unsigned long user_sp, unsigned long entry_func,
+			 uint32_t spsr)
+{
+	/*
+	 * First clear all registers to avoid leaking information from
+	 * other TAs or even the Core itself.
+	 */
+	*regs = (struct thread_ctx_regs){ };
+#ifdef ARM32
+	regs->r0 = a0;
+	regs->r1 = a1;
+	regs->r2 = a2;
+	regs->r3 = a3;
+	regs->usr_sp = user_sp;
+	regs->pc = entry_func;
+	regs->cpsr = spsr;
+#endif
+#ifdef ARM64
+	regs->x[0] = a0;
+	regs->x[1] = a1;
+	regs->x[2] = a2;
+	regs->x[3] = a3;
+	regs->sp = user_sp;
+	regs->pc = entry_func;
+	regs->cpsr = spsr;
+	regs->x[13] = user_sp;	/* Used when running TA in Aarch32 */
+	regs->sp = user_sp;	/* Used when running TA in Aarch64 */
+	/* Set frame pointer (user stack can't be unwound past this point) */
+	regs->x[29] = 0;
+#endif
+}
+
 uint32_t thread_enter_user_mode(unsigned long a0, unsigned long a1,
 		unsigned long a2, unsigned long a3, unsigned long user_sp,
 		unsigned long entry_func, bool is_32bit,
 		uint32_t *exit_status0, uint32_t *exit_status1)
 {
-	uint32_t spsr;
+	uint32_t spsr = 0;
+	uint32_t exceptions = 0;
+	uint32_t rc = 0;
+	struct thread_ctx_regs *regs = NULL;
 
 	tee_ta_update_session_utime_resume();
 
@@ -1249,8 +1289,19 @@ uint32_t thread_enter_user_mode(unsigned long a0, unsigned long a1,
 		*exit_status1 = 0xbadbadba;
 		return 0;
 	}
-	return __thread_enter_user_mode(a0, a1, a2, a3, user_sp, entry_func,
-					spsr, exit_status0, exit_status1);
+
+	exceptions = thread_mask_exceptions(THREAD_EXCP_ALL);
+	/*
+	 * We're using the per thread location of saved context registers
+	 * for temporary storage. Now that exceptions are masked they will
+	 * not be used for any thing else until they are eventually
+	 * unmasked when user mode has been entered.
+	 */
+	regs = thread_get_ctx_regs();
+	set_ctx_regs(regs, a0, a1, a2, a3, user_sp, entry_func, spsr);
+	rc = __thread_enter_user_mode(regs, exit_status0, exit_status1);
+	thread_unmask_exceptions(exceptions);
+	return rc;
 }
 
 #ifdef CFG_CORE_UNMAP_CORE_AT_EL0
@@ -1259,7 +1310,7 @@ void thread_get_user_kcode(struct mobj **mobj, size_t *offset,
 {
 	core_mmu_get_user_va_range(va, NULL);
 	*mobj = mobj_tee_ram;
-	*offset = thread_user_kcode_va - TEE_RAM_START;
+	*offset = thread_user_kcode_va - VCORE_START_VA;
 	*sz = thread_user_kcode_size;
 }
 #endif
@@ -1274,7 +1325,60 @@ void thread_get_user_kdata(struct mobj **mobj, size_t *offset,
 	core_mmu_get_user_va_range(&v, NULL);
 	*va = v + thread_user_kcode_size;
 	*mobj = mobj_tee_ram;
-	*offset = (vaddr_t)thread_user_kdata_page - TEE_RAM_START;
+	*offset = (vaddr_t)thread_user_kdata_page - VCORE_START_VA;
 	*sz = sizeof(thread_user_kdata_page);
 }
 #endif
+
+static void setup_unwind_user_mode(struct thread_svc_regs *regs)
+{
+#ifdef ARM32
+	regs->lr = (uintptr_t)thread_unwind_user_mode;
+	regs->spsr = read_cpsr();
+#endif
+#ifdef ARM64
+	regs->elr = (uintptr_t)thread_unwind_user_mode;
+	regs->spsr = SPSR_64(SPSR_64_MODE_EL1, SPSR_64_MODE_SP_EL0, 0);
+	regs->spsr |= read_daif();
+	/*
+	 * Regs is the value of stack pointer before calling the SVC
+	 * handler.  By the addition matches for the reserved space at the
+	 * beginning of el0_sync_svc(). This prepares the stack when
+	 * returning to thread_unwind_user_mode instead of a normal
+	 * exception return.
+	 */
+	regs->sp_el0 = (uint64_t)(regs + 1);
+#endif
+}
+
+/*
+ * Note: this function is weak just to make it possible to exclude it from
+ * the unpaged area.
+ */
+void __weak thread_svc_handler(struct thread_svc_regs *regs)
+{
+	struct tee_ta_session *sess = NULL;
+	uint32_t state = 0;
+
+	/* Enable native interrupts */
+	state = thread_get_exceptions();
+	thread_unmask_exceptions(state & ~THREAD_EXCP_NATIVE_INTR);
+
+	thread_user_save_vfp();
+
+	/* TA has just entered kernel mode */
+	tee_ta_update_session_utime_suspend();
+
+	/* Restore foreign interrupts which are disabled on exception entry */
+	thread_restore_foreign_intr();
+
+	tee_ta_get_current_session(&sess);
+	assert(sess && sess->ctx->ops && sess->ctx->ops->handle_svc);
+	if (sess->ctx->ops->handle_svc(regs)) {
+		/* We're about to switch back to user mode */
+		tee_ta_update_session_utime_resume();
+	} else {
+		/* We're returning from __thread_enter_user_mode() */
+		setup_unwind_user_mode(regs);
+	}
+}

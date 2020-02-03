@@ -54,6 +54,11 @@ R:	Amit Singh Tomar <amittomer25@gmail.com> [@Amit-Radur]
 S:	Maintained
 F:	core/arch/arm/plat-sunxi/
 
+AmLogic AXG (A113D)
+R:	Carlo Caione <ccaione@baylibre.com> [@carlocaione]
+S:	Maintained
+F:	core/arch/arm/plat-amlogic/
+
 Atmel ATSAMA5D2-XULT
 R:	Akshay Bhat <akshay.bhat@timesys.com> [@nodeax]
 R:	[@OP-TEE/plat-sam]
@@ -91,7 +96,7 @@ S:	Maintained
 F:	core/arch/arm/plat-poplar/
 
 Hisilicon Hi3519AV100 family
-R:	Jerome Forissier <jerome.forissier@linaro.org> [@jforissier]
+R:	Jerome Forissier <jerome.@forissier.org> [@jforissier]
 S:	Maintained
 F:	core/arch/arm/plat-hisilicon
 
@@ -166,7 +171,7 @@ S:	Maintained
 F:	core/arch/arm/plat-synquacer/
 
 Spreadtrum SC9860
-R:	Aijun Sun <aijun.sun@spreadtrum.com>
+R:	Aijun Sun <aijun.sun@unisoc.com>
 R:	[@OP-TEE/plat-sprd]
 S:	Maintained
 F:	core/arch/arm/plat-sprd/
@@ -208,7 +213,7 @@ F:	core/arch/arm/kernel/virtualization.c
 THE REST
 M:	Joakim Bech <joakim.bech@linaro.org> [@jbech-linaro]
 M:	Jens Wiklander <jens.wiklander@linaro.org> [@jenswi-linaro]
-M:	Jerome Forissier <jerome.forissier@linaro.org> [@jforissier]
+M:	Jerome Forissier <jerome@forissier.org> [@jforissier]
 M:	Linaro <op-tee@linaro.org> [@OP-TEE/linaro]
 R:	Etienne Carriere <etienne.carriere@linaro.org> [@etienne-lms]
 R:	Victor Chong <victor.chong@linaro.org> [@vchong]

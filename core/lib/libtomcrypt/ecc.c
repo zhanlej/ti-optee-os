@@ -7,7 +7,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <tee_api_types.h>
-#include <tomcrypt_private.h>
 #include <trace.h>
 #include <utee_defines.h>
 
@@ -125,6 +124,15 @@ static TEE_Result ecc_get_curve_info(uint32_t curve, uint32_t algo,
 		    (algo != TEE_ALG_ECDH_P521))
 			return TEE_ERROR_BAD_PARAMETERS;
 		break;
+	case TEE_ECC_CURVE_SM2:
+		size_bits = 256;
+		size_bytes = 32;
+		name = "SM2";
+		if ((algo != 0) && (algo != TEE_ALG_SM2_PKE) &&
+		    (algo != TEE_ALG_SM2_DSA_SM3) &&
+		    (algo != TEE_ALG_SM2_KEP))
+			return TEE_ERROR_BAD_PARAMETERS;
+		break;
 	default:
 		return TEE_ERROR_NOT_SUPPORTED;
 	}
@@ -205,10 +213,9 @@ static TEE_Result ecc_set_curve_from_name(ecc_key *ltc_key,
  * Given a keypair "key", populate the Libtomcrypt private key "ltc_key"
  * It also returns the key size, in bytes
  */
-static TEE_Result ecc_populate_ltc_private_key(ecc_key *ltc_key,
-					       struct ecc_keypair *key,
-					       uint32_t algo,
-					       size_t *key_size_bytes)
+TEE_Result ecc_populate_ltc_private_key(ecc_key *ltc_key,
+					struct ecc_keypair *key,
+					uint32_t algo, size_t *key_size_bytes)
 {
 	TEE_Result res = TEE_ERROR_GENERIC;
 	const char *name = NULL;
@@ -225,6 +232,9 @@ static TEE_Result ecc_populate_ltc_private_key(ecc_key *ltc_key,
 
 	ltc_key->type = PK_PRIVATE;
 	mp_copy(key->d, ltc_key->k);
+	mp_copy(key->x, ltc_key->pubkey.x);
+	mp_copy(key->y, ltc_key->pubkey.y);
+	mp_set_int(ltc_key->pubkey.z, 1);
 
 	return TEE_SUCCESS;
 }
@@ -233,10 +243,9 @@ static TEE_Result ecc_populate_ltc_private_key(ecc_key *ltc_key,
  * Given a public "key", populate the Libtomcrypt public key "ltc_key"
  * It also returns the key size, in bytes
  */
-static TEE_Result ecc_populate_ltc_public_key(ecc_key *ltc_key,
-					      struct ecc_public_key *key,
-					      uint32_t algo,
-					      size_t *key_size_bytes)
+TEE_Result ecc_populate_ltc_public_key(ecc_key *ltc_key,
+				       struct ecc_public_key *key,
+				       uint32_t algo, size_t *key_size_bytes)
 {
 	TEE_Result res = TEE_ERROR_GENERIC;
 	const char *name = NULL;

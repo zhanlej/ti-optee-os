@@ -10,6 +10,13 @@ CFG_RESERVED_VASPACE_SIZE ?= (1024 * 1024 * 10)
 ifeq ($(CFG_ARM64_core),y)
 CFG_KERN_LINKER_FORMAT ?= elf64-littleaarch64
 CFG_KERN_LINKER_ARCH ?= aarch64
+# TCR_EL1.IPS needs to be initialized according to the largest physical
+# address that we need to map.
+# Physical address size
+# 32 bits, 4GB.
+# 36 bits, 64GB.
+# (etc.)
+CFG_CORE_ARM64_PA_BITS ?= 32
 else
 ifeq ($(CFG_ARM32_core),y)
 CFG_KERN_LINKER_FORMAT ?= elf32-littlearm
@@ -96,6 +103,8 @@ arm32-platform-cppflags += -DARM32=1 -D__ILP32__=1
 platform-cflags-generic ?= -ffunction-sections -fdata-sections -pipe
 platform-aflags-generic ?= -pipe
 
+arm32-platform-aflags += -marm
+
 arm32-platform-cflags-no-hard-float ?= -mfloat-abi=soft
 arm32-platform-cflags-hard-float ?= -mfloat-abi=hard -funsafe-math-optimizations
 arm32-platform-cflags-generic-thumb ?= -mthumb \
@@ -133,6 +142,10 @@ core-platform-cflags += $(platform-cflags-debug-info)
 
 core-platform-aflags += $(platform-aflags-generic)
 core-platform-aflags += $(platform-aflags-debug-info)
+
+ifeq ($(CFG_CORE_ASLR),y)
+core-platform-cflags += -fpie
+endif
 
 ifeq ($(CFG_ARM64_core),y)
 arch-bits-core := 64

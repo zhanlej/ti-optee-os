@@ -19,6 +19,7 @@ srcs-$(CFG_SCIF) += scif.c
 srcs-$(CFG_DRA7_RNG) += dra7_rng.c
 srcs-$(CFG_STIH_UART) += stih_asc.c
 srcs-$(CFG_ATMEL_UART) += atmel_uart.c
+srcs-$(CFG_AMLOGIC_UART) += amlogic_uart.c
 srcs-$(CFG_MVEBU_UART) += mvebu_uart.c
 srcs-$(CFG_STM32_BSEC) += stm32_bsec.c
 srcs-$(CFG_STM32_ETZPC) += stm32_etzpc.c
@@ -32,3 +33,4 @@ srcs-$(CFG_BCM_SOTP) += bcm_sotp.c
 srcs-$(CFG_BCM_GPIO) += bcm_gpio.c
 
 subdirs-y += crypto
+subdirs-$(CFG_BNXT_FW) += bnxt

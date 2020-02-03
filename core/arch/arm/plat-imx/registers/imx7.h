@@ -5,7 +5,7 @@
 #ifndef __IMX7_H__
 #define __IMX7_H__
 
-#include <registers/imx7-crm_regs.h>
+#include <registers/imx7-crm.h>
 
 #define GIC_BASE		0x31000000
 #define GIC_SIZE		0x8000
@@ -48,6 +48,7 @@
 #define CSU_CSL_END		0x100
 #define	CSU_ACCESS_ALL		0x00FF00FF
 #define CSU_SETTING_LOCK	0x01000100
+#define CSU_SA			0x218
 
 #define TRUSTZONE_OCRAM_START	0x180000
 

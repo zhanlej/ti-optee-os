@@ -13,7 +13,7 @@ build:
     - export PATH=/usr/local/bin:$PATH  # clang
     - export CROSS_COMPILE32="ccache arm-linux-gnueabihf-"
     - export CROSS_COMPILE64="ccache aarch64-linux-gnu-"
-    - export CFG_DEBUG_INFO=n; export CCACHE_UNIFY=true
+    - export CFG_DEBUG_INFO=n
     - export CFG_WERROR=y
     - function _make() { make -j$(getconf _NPROCESSORS_ONLN) -s O=out $* && ccache -s && ccache -z; }
     - ccache -z
@@ -26,6 +26,7 @@ build:
     - _make CFG_TEE_CORE_MALLOC_DEBUG=y
     - _make CFG_CORE_SANITIZE_UNDEFINED=y
     - _make CFG_CORE_SANITIZE_KADDRESS=y
+    - _make CFG_CORE_MBEDTLS_MPI=n
     - _make CFG_LOCKDEP=y
     - _make CFG_CRYPTO=n
     - _make CFG_CRYPTO_{AES,DES}=n
@@ -34,11 +35,11 @@ build:
     - _make CFG_CRYPTO_{H,C,CBC_}MAC=n
     - _make CFG_CRYPTO_{G,C}CM=n
     - _make CFG_CRYPTO_{MD5,SHA{1,224,256,384,512,512_256}}=n
-    - _make CFG_WITH_PAGER=y
+    - _make CFG_WITH_PAGER=y out/core/tee{,-pager,-pageable}.bin
     - _make CFG_WITH_PAGER=y CFG_CRYPTOLIB_NAME=mbedtls CFG_CRYPTOLIB_DIR=lib/libmbedtls
     - _make CFG_WITH_PAGER=y CFG_WITH_LPAE=y
-    - _make CFG_WITH_LPAE=y
-    - _make CFG_RPMB_FS=y
+    - _make CFG_WITH_LPAE=y CFG_CORE_ASLR=y
+    - _make CFG_RPMB_FS=y CFG_CORE_ASLR=y
     - _make CFG_RPMB_FS=y CFG_RPMB_TESTKEY=y
     - _make CFG_REE_FS=n CFG_RPMB_FS=y
     - _make CFG_WITH_PAGER=y CFG_WITH_LPAE=y CFG_RPMB_FS=y CFG_DT=y CFG_TEE_CORE_LOG_LEVEL=1 CFG_TEE_CORE_DEBUG=y CFG_CC_OPTIMIZE_FOR_SIZE=n CFG_DEBUG_INFO=y
@@ -47,8 +48,8 @@ build:
     - _make CFG_FTRACE_SUPPORT=y CFG_ULIBS_MCOUNT=y CFG_ULIBS_SHARED=y
     - _make CFG_TA_GPROF_SUPPORT=y CFG_FTRACE_SUPPORT=y CFG_SYSCALL_FTRACE=y CFG_ULIBS_MCOUNT=y
     - _make CFG_SECURE_DATA_PATH=y
-    - _make CFG_REE_FS_TA_BUFFERED=n
-    - _make PLATFORM=vexpress-qemu_armv8a CFG_ARM64_core=y
+    - _make CFG_REE_FS_TA_BUFFERED=y
+    - _make PLATFORM=vexpress-qemu_armv8a CFG_ARM64_core=y CFG_CORE_ASLR=y
     - _make PLATFORM=vexpress-qemu_armv8a CFG_ARM64_core=y COMPILER=clang
     - _make PLATFORM=vexpress-qemu_armv8a CFG_ARM64_core=y CFG_WITH_PAGER=y
     - _make PLATFORM=vexpress-qemu_armv8a CFG_ARM64_core=y CFG_FTRACE_SUPPORT=y CFG_ULIBS_MCOUNT=y CFG_ULIBS_SHARED=y
@@ -85,16 +86,16 @@ build:
     - _make PLATFORM=imx-mx6qapalis
     - _make PLATFORM=imx-mx7dsabresd
     - _make PLATFORM=imx-mx7ulpevk
-    - _make PLATFORM=imx-imx8mmevk
-    - _make PLATFORM=imx-imx8mnevk
-    - _make PLATFORM=imx-imx8mqevk
-    - _make PLATFORM=imx-imx8qxpmek
-    - _make PLATFORM=imx-imx8qmmek
+    - _make PLATFORM=imx-mx8mmevk
+    - _make PLATFORM=imx-mx8mnevk
+    - _make PLATFORM=imx-mx8mqevk
+    - _make PLATFORM=imx-mx8qxpmek
+    - _make PLATFORM=imx-mx8qmmek
     - _make PLATFORM=k3-j721e
     - _make PLATFORM=k3-j721e CFG_ARM64_core=y
     - _make PLATFORM=k3-am65x
     - _make PLATFORM=k3-am65x CFG_ARM64_core=y
-    - _make PLATFORM=ti-dra7xx
+    - _make PLATFORM=ti-dra7xx out/core/tee{,-pager,-pageable}.bin
     - _make PLATFORM=ti-am57xx
     - _make PLATFORM=ti-am43xx
     - _make PLATFORM=sprd-sc9860
@@ -134,3 +135,4 @@ build:
     - _make PLATFORM=sunxi-sun50i_a64
     - _make PLATFORM=bcm-ns3 CFG_ARM64_core=y
     - _make PLATFORM=hisilicon-hi3519av100_demo
+    - _make PLATFORM=amlogic
