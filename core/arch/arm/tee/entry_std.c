@@ -349,6 +349,8 @@ static void entry_close_session(struct optee_msg_arg *arg, uint32_t num_params)
 	TEE_Result res;
 	struct tee_ta_session *s;
 
+	EMSG("");
+
 	if (num_params) {
 		res = TEE_ERROR_BAD_PARAMETERS;
 		goto out;
