@@ -251,10 +251,8 @@ TEE_Result vm_map_pad(struct user_mode_ctx *uctx, vaddr_t *va, size_t len,
 		uint32_t cattr;
 
 		res = mobj_get_cattr(mobj, &cattr);
-		if (res) {
-			EMSG("res:0x%x", res);
+		if (res)
 			goto err_free_reg;
-		}
 		attr |= cattr << TEE_MATTR_CACHE_SHIFT;
 	}
 	attr |= TEE_MATTR_VALID_BLOCK;
@@ -269,32 +267,25 @@ TEE_Result vm_map_pad(struct user_mode_ctx *uctx, vaddr_t *va, size_t len,
 	reg->flags = flags;
 
 	res = umap_add_region(&uctx->vm_info, reg, pad_begin, pad_end);
-	if (res) {
-		EMSG("res:0x%x", res);
+	if (res)
 		goto err_free_reg;
-	}
 
 	res = alloc_pgt(uctx);
-	if (res) {
-		EMSG("res:0x%x", res);
+	if (res)
 		goto err_rem_reg;
-	}
 
 	if (mobj_is_paged(mobj)) {
 		struct fobj *fobj = mobj_get_fobj(mobj);
 
 		if (!fobj) {
 			res = TEE_ERROR_GENERIC;
-			EMSG("res:0x%x", res);
 			goto err_rem_reg;
 		}
 
 		res = tee_pager_add_um_area(uctx, reg->va, fobj, prot);
 		fobj_put(fobj);
-		if (res) {
-			EMSG("res:0x%x", res);
+		if (res)
 			goto err_rem_reg;
-		}
 	}
 
 	/*

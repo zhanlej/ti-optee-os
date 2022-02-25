@@ -255,7 +255,6 @@ static TEE_Result init_with_ldelf(struct tee_ta_session *sess,
 	utc->uctx.ctx.flags = arg->flags;
 	utc->dump_entry_func = arg->dump_entry;
 #ifdef CFG_FTRACE_SUPPORT
-	EMSG("CFG_FTRACE_SUPPORT");
 	utc->ftrace_entry_func = arg->ftrace_entry;
 	sess->fbuf = arg->fbuf;
 #endif
@@ -453,10 +452,8 @@ static TEE_Result dump_ftrace(struct user_ta_ctx *utc, void *buf, size_t *blen)
 	uint32_t panicked = 0;
 	size_t *arg = NULL;
 
-	if (!utc->ftrace_entry_func) {
-		EMSG("");
+	if (!utc->ftrace_entry_func)
 		return TEE_ERROR_NOT_SUPPORTED;
-	}
 
 	usr_stack -= ROUNDUP(sizeof(*arg), STACK_ALIGNMENT);
 	arg = (size_t *)usr_stack;
@@ -493,7 +490,6 @@ static TEE_Result dump_ftrace(struct user_ta_ctx *utc, void *buf, size_t *blen)
 
 static void user_ta_dump_ftrace(struct tee_ta_ctx *ctx)
 {
-	EMSG("");
 	uint32_t prot = TEE_MATTR_URW;
 	struct user_ta_ctx *utc = to_user_ta_ctx(ctx);
 	struct thread_param params[3] = { };
@@ -505,40 +501,28 @@ static void user_ta_dump_ftrace(struct tee_ta_ctx *ctx)
 	size_t blen = 0, ld_addr_len = 0;
 	vaddr_t va = 0;
 
-	EMSG("");
 	res = dump_ftrace(utc, NULL, &blen);
-	if (res != TEE_ERROR_SHORT_BUFFER) {
-		EMSG("res:0x%x", res);
+	if (res != TEE_ERROR_SHORT_BUFFER)
 		return;
-	}
-
-	EMSG("blen:%d, 0x%x", blen, blen);
 
 #define LOAD_ADDR_DUMP_SIZE	64
 	pl_sz = ROUNDUP(blen + sizeof(TEE_UUID) + LOAD_ADDR_DUMP_SIZE,
 			SMALL_PAGE_SIZE);
-	
-	EMSG("pl_sz:%d, 0x%x", pl_sz, pl_sz);
 
-	EMSG("");
 	mobj = thread_rpc_alloc_payload(pl_sz);
 	if (!mobj) {
 		EMSG("Ftrace thread_rpc_alloc_payload failed");
 		return;
 	}
 
-	EMSG("");
 	buf = mobj_get_va(mobj, 0);
 	if (!buf)
 		goto out_free_pl;
 
-	EMSG("mobj->size:%d", mobj->size);
 	res = vm_map(&utc->uctx, &va, mobj->size, prot, VM_FLAG_EPHEMERAL,
 		     mobj, 0);
-	if (res) {
-		EMSG("res:0x%x", res);
+	if (res)
 		goto out_free_pl;
-	}
 
 	ubuf = (uint8_t *)va + mobj_get_phys_offs(mobj, mobj->phys_granule);
 	memcpy(ubuf, &ctx->uuid, sizeof(TEE_UUID));
@@ -549,7 +533,6 @@ static void user_ta_dump_ftrace(struct tee_ta_ctx *ctx)
 			       VCORE_START_VA);
 	ubuf += ld_addr_len;
 
-	EMSG("");
 	res = dump_ftrace(utc, ubuf, &blen);
 	if (res) {
 		EMSG("Ftrace dump failed: %#"PRIx32, res);
@@ -561,14 +544,12 @@ static void user_ta_dump_ftrace(struct tee_ta_ctx *ctx)
 	params[2] = THREAD_PARAM_MEMREF(IN, mobj, sizeof(TEE_UUID),
 					blen + ld_addr_len);
 
-	EMSG("");
 	res = thread_rpc_cmd(OPTEE_RPC_CMD_FTRACE, 3, params);
 	if (res)
 		EMSG("Ftrace thread_rpc_cmd res: %#"PRIx32, res);
 
 out_unmap_pl:
 	res = vm_unmap(&utc->uctx, va, mobj->size);
-	EMSG("res:0x%x", res);
 	assert(!res);
 out_free_pl:
 	thread_rpc_free_payload(mobj);
@@ -631,7 +612,6 @@ static struct tee_ta_ops const *_user_ta_ops;
 
 static TEE_Result init_user_ta(void)
 {
-	EMSG("");
 	_user_ta_ops = &user_ta_ops;
 
 	return TEE_SUCCESS;
@@ -640,7 +620,6 @@ service_init(init_user_ta);
 
 static void set_ta_ctx_ops(struct tee_ta_ctx *ctx)
 {
-	EMSG("");
 	ctx->ops = _user_ta_ops;
 }
 

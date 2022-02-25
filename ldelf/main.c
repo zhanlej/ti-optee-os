@@ -160,11 +160,8 @@ void ldelf(struct ldelf_arg *arg)
 
 	arg->ftrace_entry = 0;
 #ifdef CFG_FTRACE_SUPPORT
-	EMSG("");
-	if (ftrace_init(&arg->fbuf)) {
-		EMSG("");
+	if (ftrace_init(&arg->fbuf))
 		arg->ftrace_entry = (vaddr_t)(void *)ftrace_dump;
-	}
 #endif
 
 	TAILQ_FOREACH(elf, &main_elf_queue, link)

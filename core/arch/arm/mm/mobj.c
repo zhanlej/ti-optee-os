@@ -75,7 +75,6 @@ KEEP_PAGER(mobj_phys_get_pa);
 
 static TEE_Result mobj_phys_get_cattr(struct mobj *mobj, uint32_t *cattr)
 {
-	EMSG("");
 	struct mobj_phys *moph = to_mobj_phys(mobj);
 
 	if (!cattr)
@@ -246,7 +245,6 @@ static size_t mobj_mm_get_phys_offs(struct mobj *mobj, size_t granule)
 
 static TEE_Result mobj_mm_get_cattr(struct mobj *mobj, uint32_t *cattr)
 {
-	EMSG("");
 	return mobj_get_cattr(to_mobj_mm(mobj)->parent_mobj, cattr);
 }
 
@@ -584,7 +582,6 @@ static struct fobj *mobj_with_fobj_get_fobj(struct mobj *mobj)
 static TEE_Result mobj_with_fobj_get_cattr(struct mobj *mobj __unused,
 					   uint32_t *cattr)
 {
-	EMSG("");
 	if (!cattr)
 		return TEE_ERROR_GENERIC;
 

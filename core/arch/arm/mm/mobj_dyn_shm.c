@@ -168,7 +168,6 @@ static void mobj_reg_shm_free(struct mobj *mobj)
 static TEE_Result mobj_reg_shm_get_cattr(struct mobj *mobj __unused,
 					 uint32_t *cattr)
 {
-	EMSG("");
 	if (!cattr)
 		return TEE_ERROR_GENERIC;
 
