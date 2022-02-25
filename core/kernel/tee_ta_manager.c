@@ -278,7 +278,21 @@ static void destroy_session(struct tee_ta_session *s,
 			    struct tee_ta_session_head *open_sessions)
 {
 #if defined(CFG_FTRACE_SUPPORT)
+	EMSG("");
+	if (s->ctx) {
+		EMSG("");
+	}
+	if (s->ctx->ops) {
+		EMSG("");
+	}
+	if (s->ctx->ops->dump_state) {
+		EMSG("");
+	}
+	if (s->ctx->ops->dump_ftrace) {
+		EMSG("");
+	}
 	if (s->ctx && s->ctx->ops->dump_ftrace) {
+		EMSG("");
 		tee_ta_push_current_session(s);
 		s->fbuf = NULL;
 		s->ctx->ops->dump_ftrace(s->ctx);
@@ -518,13 +532,16 @@ TEE_Result tee_ta_close_session(struct tee_ta_session *csess,
 	DMSG("Destroy session");
 
 	if (!ctx) {
+		EMSG("");
 		destroy_session(sess, open_sessions);
 		return TEE_SUCCESS;
 	}
 
 	if (ctx->panicked) {
+		EMSG("");
 		destroy_session(sess, open_sessions);
 	} else {
+		EMSG("");
 		tee_ta_set_busy(ctx);
 		set_invoke_timeout(sess, TEE_TIMEOUT_INFINITE);
 		ctx->ops->enter_close_session(sess);
