@@ -14,6 +14,13 @@
 
 #include "acipher_helpers.h"
 
+#include <kernel/delay.h>
+
+static unsigned int arm_cnt_cnt2us(uint64_t cnt)
+{
+	return (cnt * 1000000ULL) / read_cntfrq();
+}
+
 
 /*
  * Compute the LibTomCrypt "hashindex" given a TEE Algorithm "algo"
@@ -502,9 +509,16 @@ TEE_Result crypto_acipher_rsassa_sign(uint32_t algo, struct rsa_keypair *key,
 
 	ltc_sig_len = mod_size;
 
+	// uint64_t start = 0;
+	// uint64_t end = 0;
+
+	// EMSG("ltc_rsa_algo:%d ltc_hashindex:%d, salt_len:%d", ltc_rsa_algo, ltc_hashindex, salt_len);
+	// start = read_cntpct();
 	ltc_res = rsa_sign_hash_ex(msg, msg_len, sig, &ltc_sig_len,
 				   ltc_rsa_algo, NULL, find_prng("prng_crypto"),
 				   ltc_hashindex, salt_len, &ltc_key);
+	// end = read_cntpct();
+	// EMSG("time spent in microseconds: %u", arm_cnt_cnt2us(end - start));
 
 	*sig_len = ltc_sig_len;
 

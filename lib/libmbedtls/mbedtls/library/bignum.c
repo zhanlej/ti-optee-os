@@ -1776,6 +1776,25 @@ int mbedtls_mpi_montred( mbedtls_mpi *A, const mbedtls_mpi *N,
     return( mbedtls_mpi_montmul( A, &U, N, mm, T ) );
 }
 
+#ifdef MBEDTLS_CONFIG_TA
+#include "tee_internal_api.h"
+#include "tee_api_defines.h"
+#include "trace.h"
+#include "tee_api_defines_extensions.h"
+#include "tee_api.h"
+
+
+static inline uint32_t tee_time_to_ms(TEE_Time t)
+{
+    return t.seconds * 1000 + t.millis;
+}
+
+static inline uint32_t get_delta_time_in_ms(TEE_Time start, TEE_Time stop)
+{
+    return tee_time_to_ms(stop) - tee_time_to_ms(start);
+}
+#endif
+
 /*
  * Sliding-window exponentiation: X = A^E mod N  (HAC 14.85)
  */
@@ -1783,6 +1802,11 @@ int mbedtls_mpi_exp_mod( mbedtls_mpi *X, const mbedtls_mpi *A,
                          const mbedtls_mpi *E, const mbedtls_mpi *N,
                          mbedtls_mpi *_RR )
 {
+#ifdef MBEDTLS_CONFIG_TA
+    TEE_Time start, end;
+    uint32_t time_ms = 0;
+    TEE_GetSystemTime(&start);
+#endif
     int ret;
     size_t wbits, wsize, one = 1;
     size_t i, j, nblimbs;
@@ -2000,6 +2024,12 @@ cleanup:
 
     if( _RR == NULL || _RR->p == NULL )
         mbedtls_mpi_free( &RR );
+    
+#ifdef MBEDTLS_CONFIG_TA
+    TEE_GetSystemTime(&end);
+    time_ms = get_delta_time_in_ms(start, end);
+    EMSG("time_ms:%d", time_ms);
+#endif
 
     return( ret );
 }

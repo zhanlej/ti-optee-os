@@ -26,6 +26,14 @@
 #define biL		(ciL << 3)			/* bits  in limb  */
 #define BITS_TO_LIMBS(i)	((i) / biL + ((i) % biL != 0))
 
+#include <trace.h>
+#include <kernel/delay.h>
+
+static unsigned int arm_cnt_cnt2us(uint64_t cnt)
+{
+	return (cnt * 1000000ULL) / read_cntfrq();
+}
+
 #if defined(_CFG_CORE_LTC_PAGER)
 /* allocate pageable_zi vmem for mp scratch memory pool */
 static struct mempool *get_mp_scratch_memory_pool(void)
@@ -576,6 +584,9 @@ static void montgomery_deinit(void *a)
  */
 static int exptmod(void *a, void *b, void *c, void *d)
 {
+// 	uint64_t start = 0;
+// 	uint64_t end = 0;
+//    start = read_cntpct();
 	int res;
 
 	if (d == a || d == b || d == c) {
@@ -589,6 +600,8 @@ static int exptmod(void *a, void *b, void *c, void *d)
 	} else {
 		res = mbedtls_mpi_exp_mod(d, a, b, c, NULL);
 	}
+	// end = read_cntpct();
+	// EMSG("time spent in microseconds: %u", arm_cnt_cnt2us(end - start));
 
 	if (res)
 		return CRYPT_MEM;

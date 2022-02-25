@@ -9,6 +9,14 @@
  */
 #include "tomcrypt_private.h"
 
+#include <trace.h>
+#include <kernel/delay.h>
+
+static unsigned int arm_cnt_cnt2us(uint64_t cnt)
+{
+	return (cnt * 1000000ULL) / read_cntfrq();
+}
+
 /**
   @file rsa_exptmod.c
   RSA PKCS exptmod, Tom St Denis
@@ -31,6 +39,9 @@ int rsa_exptmod(const unsigned char *in,   unsigned long inlen,
                       unsigned char *out,  unsigned long *outlen, int which,
                 const rsa_key *key)
 {
+   // uint64_t start = 0;
+	// uint64_t end = 0;
+   // start = read_cntpct();
    void        *tmp, *tmpa, *tmpb;
    #ifdef LTC_RSA_BLINDING
    void        *rnd, *rndi /* inverse of rnd */;
@@ -103,6 +114,8 @@ int rsa_exptmod(const unsigned char *in,   unsigned long inlen,
                                  (key->dP != NULL) && (mp_get_digit_count(key->dP) != 0) &&
                                     (key->dQ != NULL) && (mp_get_digit_count(key->dQ) != 0) &&
                                        (key->qP != NULL) && (mp_get_digit_count(key->qP) != 0);
+      
+      // EMSG("has_crt_parameters:%d", has_crt_parameters);
 
       if (!has_crt_parameters) {
          /*
@@ -173,6 +186,8 @@ error:
                   rndi, rnd,
 #endif /* LTC_RSA_BLINDING */
                              tmpb, tmpa, tmp, NULL);
+   // end = read_cntpct();
+	// EMSG("time spent in microseconds: %u", arm_cnt_cnt2us(end - start));
    return err;
 }
 
